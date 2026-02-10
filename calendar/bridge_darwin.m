@@ -1,6 +1,7 @@
 #import <EventKit/EventKit.h>
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
+#import <CoreLocation/CoreLocation.h>
 #include "bridge_darwin.h"
 #include <stdlib.h>
 #include <string.h>
@@ -98,7 +99,7 @@ static NSDictionary* event_to_dict(EKEvent* e) {
     // Use eventIdentifier — stable across recurrence edits.
     d[@"id"] = e.eventIdentifier ?: @"";
     d[@"title"] = e.title ?: @"";
-    d[@"allDay"] = @(e.allDay);
+    d[@"allDay"] = e.allDay ? @YES : @NO;
     d[@"location"] = e.location ?: [NSNull null];
     d[@"notes"] = e.notes ?: [NSNull null];
     d[@"url"] = e.URL ? [e.URL absoluteString] : [NSNull null];
@@ -106,7 +107,92 @@ static NSDictionary* event_to_dict(EKEvent* e) {
     d[@"calendarID"] = e.calendar.calendarIdentifier ?: @"";
     d[@"status"] = @(e.status);
     d[@"availability"] = @(e.availability);
-    d[@"recurring"] = @(e.hasRecurrenceRules);
+    d[@"recurring"] = e.hasRecurrenceRules ? @YES : @NO;
+    d[@"isDetached"] = e.isDetached ? @YES : @NO;
+
+    // Occurrence date (for recurring events).
+    if (e.occurrenceDate) {
+        d[@"occurrenceDate"] = format_date(e.occurrenceDate);
+    }
+
+    // Recurrence rules.
+    if (e.recurrenceRules && e.recurrenceRules.count > 0) {
+        NSMutableArray* rules = [NSMutableArray array];
+        for (EKRecurrenceRule* rule in e.recurrenceRules) {
+            NSMutableDictionary* rd = [NSMutableDictionary dictionary];
+            rd[@"frequency"] = @(rule.frequency);
+            rd[@"interval"] = @(rule.interval);
+
+            // Days of the week.
+            if (rule.daysOfTheWeek && rule.daysOfTheWeek.count > 0) {
+                NSMutableArray* days = [NSMutableArray array];
+                for (EKRecurrenceDayOfWeek* dow in rule.daysOfTheWeek) {
+                    [days addObject:@{
+                        @"dayOfTheWeek": @(dow.dayOfTheWeek),
+                        @"weekNumber": @(dow.weekNumber)
+                    }];
+                }
+                rd[@"daysOfTheWeek"] = days;
+            }
+
+            // Days of the month.
+            if (rule.daysOfTheMonth && rule.daysOfTheMonth.count > 0) {
+                rd[@"daysOfTheMonth"] = rule.daysOfTheMonth;
+            }
+
+            // Months of the year.
+            if (rule.monthsOfTheYear && rule.monthsOfTheYear.count > 0) {
+                rd[@"monthsOfTheYear"] = rule.monthsOfTheYear;
+            }
+
+            // Weeks of the year.
+            if (rule.weeksOfTheYear && rule.weeksOfTheYear.count > 0) {
+                rd[@"weeksOfTheYear"] = rule.weeksOfTheYear;
+            }
+
+            // Days of the year.
+            if (rule.daysOfTheYear && rule.daysOfTheYear.count > 0) {
+                rd[@"daysOfTheYear"] = rule.daysOfTheYear;
+            }
+
+            // Set positions.
+            if (rule.setPositions && rule.setPositions.count > 0) {
+                rd[@"setPositions"] = rule.setPositions;
+            }
+
+            // Recurrence end.
+            if (rule.recurrenceEnd) {
+                NSMutableDictionary* endDict = [NSMutableDictionary dictionary];
+                if (rule.recurrenceEnd.endDate) {
+                    endDict[@"endDate"] = format_date(rule.recurrenceEnd.endDate);
+                }
+                if (rule.recurrenceEnd.occurrenceCount > 0) {
+                    endDict[@"occurrenceCount"] = @(rule.recurrenceEnd.occurrenceCount);
+                }
+                rd[@"end"] = endDict;
+            }
+
+            [rules addObject:rd];
+        }
+        d[@"recurrenceRules"] = rules;
+    } else {
+        d[@"recurrenceRules"] = @[];
+    }
+
+    // Structured location.
+    if (e.structuredLocation) {
+        EKStructuredLocation* loc = e.structuredLocation;
+        NSMutableDictionary* locDict = [NSMutableDictionary dictionary];
+        locDict[@"title"] = loc.title ?: @"";
+        if (loc.geoLocation) {
+            locDict[@"latitude"] = @(loc.geoLocation.coordinate.latitude);
+            locDict[@"longitude"] = @(loc.geoLocation.coordinate.longitude);
+        }
+        if (loc.radius > 0) {
+            locDict[@"radius"] = @(loc.radius);
+        }
+        d[@"structuredLocation"] = locDict;
+    }
 
     // Dates — always format as UTC ISO 8601.
     if (e.startDate) {
@@ -464,6 +550,88 @@ char* ek_cal_create_event(const char* json_input) {
             }
         }
 
+        // Recurrence rules.
+        if (input[@"recurrenceRules"] && input[@"recurrenceRules"] != [NSNull null]) {
+            NSArray* ruleInputs = input[@"recurrenceRules"];
+            for (NSDictionary* ruleInput in ruleInputs) {
+                EKRecurrenceFrequency freq = [ruleInput[@"frequency"] integerValue];
+                NSInteger interval = [ruleInput[@"interval"] integerValue];
+                if (interval < 1) interval = 1;
+
+                // Days of the week.
+                NSMutableArray<EKRecurrenceDayOfWeek*>* daysOfWeek = nil;
+                if (ruleInput[@"daysOfTheWeek"] && ruleInput[@"daysOfTheWeek"] != [NSNull null]) {
+                    NSArray* dowInputs = ruleInput[@"daysOfTheWeek"];
+                    daysOfWeek = [NSMutableArray arrayWithCapacity:dowInputs.count];
+                    for (NSDictionary* dowInput in dowInputs) {
+                        EKWeekday weekday = [dowInput[@"dayOfTheWeek"] integerValue];
+                        NSInteger weekNum = [dowInput[@"weekNumber"] integerValue];
+                        if (weekNum != 0) {
+                            [daysOfWeek addObject:[EKRecurrenceDayOfWeek dayOfWeek:weekday weekNumber:weekNum]];
+                        } else {
+                            [daysOfWeek addObject:[EKRecurrenceDayOfWeek dayOfWeek:weekday]];
+                        }
+                    }
+                }
+
+                // Integer arrays.
+                NSArray<NSNumber*>* daysOfMonth = ruleInput[@"daysOfTheMonth"];
+                if (daysOfMonth == (id)[NSNull null]) daysOfMonth = nil;
+                NSArray<NSNumber*>* monthsOfYear = ruleInput[@"monthsOfTheYear"];
+                if (monthsOfYear == (id)[NSNull null]) monthsOfYear = nil;
+                NSArray<NSNumber*>* weeksOfYear = ruleInput[@"weeksOfTheYear"];
+                if (weeksOfYear == (id)[NSNull null]) weeksOfYear = nil;
+                NSArray<NSNumber*>* daysOfYear = ruleInput[@"daysOfTheYear"];
+                if (daysOfYear == (id)[NSNull null]) daysOfYear = nil;
+                NSArray<NSNumber*>* setPositions = ruleInput[@"setPositions"];
+                if (setPositions == (id)[NSNull null]) setPositions = nil;
+
+                // Recurrence end.
+                EKRecurrenceEnd* recEnd = nil;
+                NSDictionary* endInput = ruleInput[@"end"];
+                if (endInput && endInput != (id)[NSNull null]) {
+                    if (endInput[@"endDate"] && endInput[@"endDate"] != [NSNull null]) {
+                        NSDate* endDate = parse_iso_date([endInput[@"endDate"] UTF8String]);
+                        if (endDate) {
+                            recEnd = [EKRecurrenceEnd recurrenceEndWithEndDate:endDate];
+                        }
+                    } else if (endInput[@"occurrenceCount"] && [endInput[@"occurrenceCount"] integerValue] > 0) {
+                        recEnd = [EKRecurrenceEnd recurrenceEndWithOccurrenceCount:[endInput[@"occurrenceCount"] integerValue]];
+                    }
+                }
+
+                EKRecurrenceRule* rule = [[EKRecurrenceRule alloc]
+                    initRecurrenceWithFrequency:freq
+                                      interval:interval
+                                 daysOfTheWeek:daysOfWeek
+                                daysOfTheMonth:daysOfMonth
+                               monthsOfTheYear:monthsOfYear
+                                weeksOfTheYear:weeksOfYear
+                                 daysOfTheYear:daysOfYear
+                                  setPositions:setPositions
+                                           end:recEnd];
+                [event addRecurrenceRule:rule];
+            }
+        }
+
+        // Structured location.
+        if (input[@"structuredLocation"] && input[@"structuredLocation"] != [NSNull null]) {
+            NSDictionary* locInput = input[@"structuredLocation"];
+            NSString* locTitle = locInput[@"title"] ?: @"";
+            EKStructuredLocation* loc = [EKStructuredLocation locationWithTitle:locTitle];
+            NSNumber* lat = locInput[@"latitude"];
+            NSNumber* lng = locInput[@"longitude"];
+            if (lat && lat != (id)[NSNull null] && lng && lng != (id)[NSNull null]) {
+                loc.geoLocation = [[CLLocation alloc] initWithLatitude:[lat doubleValue]
+                                                             longitude:[lng doubleValue]];
+            }
+            NSNumber* radius = locInput[@"radius"];
+            if (radius && radius != (id)[NSNull null]) {
+                loc.radius = [radius doubleValue];
+            }
+            event.structuredLocation = loc;
+        }
+
         // Save.
         NSError* saveError = nil;
         BOOL saved = [store saveEvent:event span:EKSpanThisEvent commit:YES error:&saveError];
@@ -576,6 +744,95 @@ char* ek_cal_update_event(const char* event_id, const char* json_input, int span
                     EKAlarm* alarm = [EKAlarm alarmWithRelativeOffset:offset];
                     [event addAlarm:alarm];
                 }
+            }
+        }
+
+        // Recurrence rules (replace all).
+        if (input[@"recurrenceRules"] != nil) {
+            // Remove existing rules.
+            for (EKRecurrenceRule* rule in [event.recurrenceRules copy]) {
+                [event removeRecurrenceRule:rule];
+            }
+            if (input[@"recurrenceRules"] != [NSNull null]) {
+                NSArray* ruleInputs = input[@"recurrenceRules"];
+                for (NSDictionary* ruleInput in ruleInputs) {
+                    EKRecurrenceFrequency freq = [ruleInput[@"frequency"] integerValue];
+                    NSInteger interval = [ruleInput[@"interval"] integerValue];
+                    if (interval < 1) interval = 1;
+
+                    NSMutableArray<EKRecurrenceDayOfWeek*>* daysOfWeek = nil;
+                    if (ruleInput[@"daysOfTheWeek"] && ruleInput[@"daysOfTheWeek"] != [NSNull null]) {
+                        NSArray* dowInputs = ruleInput[@"daysOfTheWeek"];
+                        daysOfWeek = [NSMutableArray arrayWithCapacity:dowInputs.count];
+                        for (NSDictionary* dowInput in dowInputs) {
+                            EKWeekday weekday = [dowInput[@"dayOfTheWeek"] integerValue];
+                            NSInteger weekNum = [dowInput[@"weekNumber"] integerValue];
+                            if (weekNum != 0) {
+                                [daysOfWeek addObject:[EKRecurrenceDayOfWeek dayOfWeek:weekday weekNumber:weekNum]];
+                            } else {
+                                [daysOfWeek addObject:[EKRecurrenceDayOfWeek dayOfWeek:weekday]];
+                            }
+                        }
+                    }
+
+                    NSArray<NSNumber*>* daysOfMonth = ruleInput[@"daysOfTheMonth"];
+                    if (daysOfMonth == (id)[NSNull null]) daysOfMonth = nil;
+                    NSArray<NSNumber*>* monthsOfYear = ruleInput[@"monthsOfTheYear"];
+                    if (monthsOfYear == (id)[NSNull null]) monthsOfYear = nil;
+                    NSArray<NSNumber*>* weeksOfYear = ruleInput[@"weeksOfTheYear"];
+                    if (weeksOfYear == (id)[NSNull null]) weeksOfYear = nil;
+                    NSArray<NSNumber*>* daysOfYear = ruleInput[@"daysOfTheYear"];
+                    if (daysOfYear == (id)[NSNull null]) daysOfYear = nil;
+                    NSArray<NSNumber*>* setPositions = ruleInput[@"setPositions"];
+                    if (setPositions == (id)[NSNull null]) setPositions = nil;
+
+                    EKRecurrenceEnd* recEnd = nil;
+                    NSDictionary* endInput = ruleInput[@"end"];
+                    if (endInput && endInput != (id)[NSNull null]) {
+                        if (endInput[@"endDate"] && endInput[@"endDate"] != [NSNull null]) {
+                            NSDate* endDate = parse_iso_date([endInput[@"endDate"] UTF8String]);
+                            if (endDate) {
+                                recEnd = [EKRecurrenceEnd recurrenceEndWithEndDate:endDate];
+                            }
+                        } else if (endInput[@"occurrenceCount"] && [endInput[@"occurrenceCount"] integerValue] > 0) {
+                            recEnd = [EKRecurrenceEnd recurrenceEndWithOccurrenceCount:[endInput[@"occurrenceCount"] integerValue]];
+                        }
+                    }
+
+                    EKRecurrenceRule* rule = [[EKRecurrenceRule alloc]
+                        initRecurrenceWithFrequency:freq
+                                          interval:interval
+                                     daysOfTheWeek:daysOfWeek
+                                    daysOfTheMonth:daysOfMonth
+                                   monthsOfTheYear:monthsOfYear
+                                    weeksOfTheYear:weeksOfYear
+                                     daysOfTheYear:daysOfYear
+                                      setPositions:setPositions
+                                               end:recEnd];
+                    [event addRecurrenceRule:rule];
+                }
+            }
+        }
+
+        // Structured location.
+        if (input[@"structuredLocation"] != nil) {
+            if (input[@"structuredLocation"] == [NSNull null]) {
+                event.structuredLocation = nil;
+            } else {
+                NSDictionary* locInput = input[@"structuredLocation"];
+                NSString* locTitle = locInput[@"title"] ?: @"";
+                EKStructuredLocation* loc = [EKStructuredLocation locationWithTitle:locTitle];
+                NSNumber* lat = locInput[@"latitude"];
+                NSNumber* lng = locInput[@"longitude"];
+                if (lat && lat != (id)[NSNull null] && lng && lng != (id)[NSNull null]) {
+                    loc.geoLocation = [[CLLocation alloc] initWithLatitude:[lat doubleValue]
+                                                                 longitude:[lng doubleValue]];
+                }
+                NSNumber* radius = locInput[@"radius"];
+                if (radius && radius != (id)[NSNull null]) {
+                    loc.radius = [radius doubleValue];
+                }
+                event.structuredLocation = loc;
             }
         }
 

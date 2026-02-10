@@ -4,7 +4,7 @@ package calendar
 
 /*
 #cgo CFLAGS: -x objective-c -fobjc-arc
-#cgo LDFLAGS: -framework EventKit -framework Foundation -framework AppKit
+#cgo LDFLAGS: -framework EventKit -framework Foundation -framework AppKit -framework CoreLocation
 #include "bridge_darwin.h"
 #include <stdlib.h>
 */
