@@ -665,6 +665,384 @@ func TestEdgeCases(t *testing.T) {
 	})
 }
 
+// --- Recurrence rule mock roundtrip tests ---
+
+func TestMockRecurrenceRuleRoundtrip(t *testing.T) {
+	t.Run("daily recurrence roundtrip", func(t *testing.T) {
+		// Simulate ObjC returning an event with a daily recurrence rule
+		jsonStr := `{
+			"id": "rec-daily",
+			"title": "Daily Standup",
+			"startDate": "2026-02-11T10:00:00.000Z",
+			"endDate": "2026-02-11T10:30:00.000Z",
+			"allDay": false,
+			"calendar": "Work",
+			"calendarID": "cal-1",
+			"status": 1,
+			"availability": 0,
+			"recurring": true,
+			"isDetached": false,
+			"recurrenceRules": [
+				{
+					"frequency": 0,
+					"interval": 1
+				}
+			],
+			"attendees": [],
+			"alerts": []
+		}`
+
+		event, err := parseEventJSON(jsonStr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if !event.Recurring {
+			t.Error("Recurring should be true")
+		}
+		if len(event.RecurrenceRules) != 1 {
+			t.Fatalf("RecurrenceRules count = %d, want 1", len(event.RecurrenceRules))
+		}
+		if event.RecurrenceRules[0].Frequency != FrequencyDaily {
+			t.Errorf("Frequency = %d, want %d", event.RecurrenceRules[0].Frequency, FrequencyDaily)
+		}
+		if event.RecurrenceRules[0].Interval != 1 {
+			t.Errorf("Interval = %d, want 1", event.RecurrenceRules[0].Interval)
+		}
+	})
+
+	t.Run("weekly recurrence with days roundtrip", func(t *testing.T) {
+		jsonStr := `{
+			"id": "rec-weekly",
+			"title": "MWF Meeting",
+			"startDate": "2026-02-11T10:00:00.000Z",
+			"endDate": "2026-02-11T10:30:00.000Z",
+			"allDay": false,
+			"calendar": "Work",
+			"calendarID": "cal-1",
+			"status": 1,
+			"availability": 0,
+			"recurring": true,
+			"isDetached": false,
+			"recurrenceRules": [
+				{
+					"frequency": 1,
+					"interval": 2,
+					"daysOfTheWeek": [
+						{"dayOfTheWeek": 2, "weekNumber": 0},
+						{"dayOfTheWeek": 4, "weekNumber": 0},
+						{"dayOfTheWeek": 6, "weekNumber": 0}
+					],
+					"end": {"occurrenceCount": 10}
+				}
+			],
+			"attendees": [],
+			"alerts": []
+		}`
+
+		event, err := parseEventJSON(jsonStr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		rule := event.RecurrenceRules[0]
+		if rule.Interval != 2 {
+			t.Errorf("Interval = %d, want 2", rule.Interval)
+		}
+		if len(rule.DaysOfTheWeek) != 3 {
+			t.Fatalf("DaysOfTheWeek count = %d, want 3", len(rule.DaysOfTheWeek))
+		}
+		if rule.End == nil || rule.End.OccurrenceCount != 10 {
+			t.Errorf("End = %+v, want OccurrenceCount=10", rule.End)
+		}
+	})
+
+	t.Run("create input with recurrence marshals and parses back", func(t *testing.T) {
+		endDate := time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC)
+		input := CreateEventInput{
+			Title:     "Recurring Meeting",
+			StartDate: time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC),
+			EndDate:   time.Date(2026, 2, 12, 11, 0, 0, 0, time.UTC),
+			RecurrenceRules: []RecurrenceRule{
+				Weekly(1, Monday, Wednesday, Friday).Until(endDate),
+			},
+		}
+
+		data, err := marshalCreateInput(input)
+		if err != nil {
+			t.Fatalf("marshal error: %v", err)
+		}
+
+		var m map[string]any
+		json.Unmarshal(data, &m)
+
+		rules := m["recurrenceRules"].([]any)
+		if len(rules) != 1 {
+			t.Fatalf("rules count = %d, want 1", len(rules))
+		}
+
+		rule := rules[0].(map[string]any)
+		if rule["frequency"] != 1.0 {
+			t.Errorf("frequency = %v, want 1", rule["frequency"])
+		}
+		if rule["interval"] != 1.0 {
+			t.Errorf("interval = %v, want 1", rule["interval"])
+		}
+		days := rule["daysOfTheWeek"].([]any)
+		if len(days) != 3 {
+			t.Errorf("daysOfTheWeek count = %d, want 3", len(days))
+		}
+		end := rule["end"].(map[string]any)
+		if end["endDate"] != "2026-12-31T00:00:00.000Z" {
+			t.Errorf("endDate = %v", end["endDate"])
+		}
+	})
+}
+
+func TestMockStructuredLocationRoundtrip(t *testing.T) {
+	t.Run("full structured location roundtrip", func(t *testing.T) {
+		jsonStr := `{
+			"id": "loc-1",
+			"title": "Meeting at HQ",
+			"startDate": "2026-02-11T10:00:00.000Z",
+			"endDate": "2026-02-11T11:00:00.000Z",
+			"allDay": false,
+			"location": "Apple Park",
+			"calendar": "Work",
+			"calendarID": "cal-1",
+			"status": 0,
+			"availability": 0,
+			"recurring": false,
+			"isDetached": false,
+			"recurrenceRules": [],
+			"structuredLocation": {
+				"title": "Apple Park",
+				"latitude": 37.3349,
+				"longitude": -122.009,
+				"radius": 150
+			},
+			"attendees": [],
+			"alerts": []
+		}`
+
+		event, err := parseEventJSON(jsonStr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if event.StructuredLocation == nil {
+			t.Fatal("StructuredLocation should not be nil")
+		}
+		if event.StructuredLocation.Title != "Apple Park" {
+			t.Errorf("Title = %q", event.StructuredLocation.Title)
+		}
+		if event.StructuredLocation.Latitude != 37.3349 {
+			t.Errorf("Latitude = %f", event.StructuredLocation.Latitude)
+		}
+		if event.StructuredLocation.Longitude != -122.009 {
+			t.Errorf("Longitude = %f", event.StructuredLocation.Longitude)
+		}
+		if event.StructuredLocation.Radius != 150 {
+			t.Errorf("Radius = %f", event.StructuredLocation.Radius)
+		}
+	})
+
+	t.Run("create input with structured location marshals correctly", func(t *testing.T) {
+		input := CreateEventInput{
+			Title:     "Location Meeting",
+			StartDate: time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC),
+			EndDate:   time.Date(2026, 2, 12, 11, 0, 0, 0, time.UTC),
+			StructuredLocation: &StructuredLocation{
+				Title:     "NYC Office",
+				Latitude:  40.7128,
+				Longitude: -74.0060,
+				Radius:    100,
+			},
+		}
+
+		data, err := marshalCreateInput(input)
+		if err != nil {
+			t.Fatalf("marshal error: %v", err)
+		}
+
+		var m map[string]any
+		json.Unmarshal(data, &m)
+
+		sl := m["structuredLocation"].(map[string]any)
+		if sl["title"] != "NYC Office" {
+			t.Errorf("title = %v", sl["title"])
+		}
+		if sl["latitude"] != 40.7128 {
+			t.Errorf("latitude = %v", sl["latitude"])
+		}
+		if sl["longitude"] != -74.006 {
+			t.Errorf("longitude = %v", sl["longitude"])
+		}
+	})
+
+	t.Run("zero coordinates in structured location", func(t *testing.T) {
+		jsonStr := `{
+			"id": "loc-zero",
+			"title": "Zero Coords Event",
+			"startDate": "2026-02-11T10:00:00.000Z",
+			"endDate": "2026-02-11T11:00:00.000Z",
+			"allDay": false,
+			"calendar": "Work",
+			"calendarID": "cal-1",
+			"status": 0,
+			"availability": 0,
+			"recurring": false,
+			"isDetached": false,
+			"recurrenceRules": [],
+			"structuredLocation": {
+				"title": "Null Island",
+				"latitude": 0,
+				"longitude": 0
+			},
+			"attendees": [],
+			"alerts": []
+		}`
+
+		event, err := parseEventJSON(jsonStr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if event.StructuredLocation == nil {
+			t.Fatal("StructuredLocation should not be nil")
+		}
+		if event.StructuredLocation.Title != "Null Island" {
+			t.Errorf("Title = %q", event.StructuredLocation.Title)
+		}
+		// Zero coordinates are valid (Null Island is a real concept)
+		if event.StructuredLocation.Latitude != 0 {
+			t.Errorf("Latitude = %f, want 0", event.StructuredLocation.Latitude)
+		}
+		if event.StructuredLocation.Longitude != 0 {
+			t.Errorf("Longitude = %f, want 0", event.StructuredLocation.Longitude)
+		}
+	})
+}
+
+func TestMockDetachedOccurrence(t *testing.T) {
+	jsonStr := `{
+		"id": "det-1",
+		"title": "Modified Occurrence",
+		"startDate": "2026-02-11T14:00:00.000Z",
+		"endDate": "2026-02-11T14:30:00.000Z",
+		"allDay": false,
+		"calendar": "Work",
+		"calendarID": "cal-1",
+		"status": 1,
+		"availability": 0,
+		"recurring": true,
+		"isDetached": true,
+		"occurrenceDate": "2026-02-11T10:00:00.000Z",
+		"recurrenceRules": [],
+		"attendees": [],
+		"alerts": []
+	}`
+
+	event, err := parseEventJSON(jsonStr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !event.IsDetached {
+		t.Error("IsDetached should be true")
+	}
+	if event.OccurrenceDate == nil {
+		t.Fatal("OccurrenceDate should not be nil")
+	}
+	wantOcc := time.Date(2026, 2, 11, 10, 0, 0, 0, time.UTC)
+	if !event.OccurrenceDate.Equal(wantOcc) {
+		t.Errorf("OccurrenceDate = %v, want %v", *event.OccurrenceDate, wantOcc)
+	}
+}
+
+func TestMockRecurrenceEdgeCases(t *testing.T) {
+	t.Run("negative days of month", func(t *testing.T) {
+		jsonStr := `{
+			"id": "edge-neg",
+			"title": "Last Day",
+			"startDate": "2026-02-11T10:00:00.000Z",
+			"endDate": "2026-02-11T11:00:00.000Z",
+			"allDay": false,
+			"calendar": "Work",
+			"calendarID": "cal-1",
+			"status": 0,
+			"availability": 0,
+			"recurring": true,
+			"isDetached": false,
+			"recurrenceRules": [
+				{
+					"frequency": 2,
+					"interval": 1,
+					"daysOfTheMonth": [-1, -2]
+				}
+			],
+			"attendees": [],
+			"alerts": []
+		}`
+
+		event, err := parseEventJSON(jsonStr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		rule := event.RecurrenceRules[0]
+		if len(rule.DaysOfTheMonth) != 2 {
+			t.Fatalf("DaysOfTheMonth count = %d, want 2", len(rule.DaysOfTheMonth))
+		}
+		if rule.DaysOfTheMonth[0] != -1 || rule.DaysOfTheMonth[1] != -2 {
+			t.Errorf("DaysOfTheMonth = %v, want [-1, -2]", rule.DaysOfTheMonth)
+		}
+	})
+
+	t.Run("week number on day of week", func(t *testing.T) {
+		jsonStr := `{
+			"id": "edge-weeknum",
+			"title": "Second Tuesday",
+			"startDate": "2026-02-11T10:00:00.000Z",
+			"endDate": "2026-02-11T11:00:00.000Z",
+			"allDay": false,
+			"calendar": "Work",
+			"calendarID": "cal-1",
+			"status": 0,
+			"availability": 0,
+			"recurring": true,
+			"isDetached": false,
+			"recurrenceRules": [
+				{
+					"frequency": 2,
+					"interval": 1,
+					"daysOfTheWeek": [
+						{"dayOfTheWeek": 3, "weekNumber": 2}
+					]
+				}
+			],
+			"attendees": [],
+			"alerts": []
+		}`
+
+		event, err := parseEventJSON(jsonStr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		rule := event.RecurrenceRules[0]
+		if len(rule.DaysOfTheWeek) != 1 {
+			t.Fatalf("DaysOfTheWeek count = %d, want 1", len(rule.DaysOfTheWeek))
+		}
+		if rule.DaysOfTheWeek[0].DayOfTheWeek != Tuesday {
+			t.Errorf("DayOfTheWeek = %d, want %d (Tuesday)", rule.DaysOfTheWeek[0].DayOfTheWeek, Tuesday)
+		}
+		if rule.DaysOfTheWeek[0].WeekNumber != 2 {
+			t.Errorf("WeekNumber = %d, want 2", rule.DaysOfTheWeek[0].WeekNumber)
+		}
+	})
+}
+
 // --- Comprehensive marshal/parse symmetry test ---
 
 func TestCreateInputMarshalParseSymmetry(t *testing.T) {

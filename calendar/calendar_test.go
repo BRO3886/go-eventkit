@@ -1234,6 +1234,856 @@ func TestEnumValues(t *testing.T) {
 	}
 }
 
+// --- Recurrence frequency String() tests ---
+
+func TestRecurrenceFrequencyString(t *testing.T) {
+	tests := []struct {
+		f    RecurrenceFrequency
+		want string
+	}{
+		{FrequencyDaily, "daily"},
+		{FrequencyWeekly, "weekly"},
+		{FrequencyMonthly, "monthly"},
+		{FrequencyYearly, "yearly"},
+		{RecurrenceFrequency(99), "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			if got := tt.f.String(); got != tt.want {
+				t.Errorf("RecurrenceFrequency(%d).String() = %q, want %q", tt.f, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWeekdayString(t *testing.T) {
+	tests := []struct {
+		w    Weekday
+		want string
+	}{
+		{Sunday, "sunday"},
+		{Monday, "monday"},
+		{Tuesday, "tuesday"},
+		{Wednesday, "wednesday"},
+		{Thursday, "thursday"},
+		{Friday, "friday"},
+		{Saturday, "saturday"},
+		{Weekday(99), "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			if got := tt.w.String(); got != tt.want {
+				t.Errorf("Weekday(%d).String() = %q, want %q", tt.w, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- Convenience constructor tests ---
+
+func TestDailyConstructor(t *testing.T) {
+	r := Daily(1)
+	if r.Frequency != FrequencyDaily {
+		t.Errorf("Frequency = %d, want %d", r.Frequency, FrequencyDaily)
+	}
+	if r.Interval != 1 {
+		t.Errorf("Interval = %d, want 1", r.Interval)
+	}
+	if r.End != nil {
+		t.Error("End should be nil")
+	}
+}
+
+func TestWeeklyConstructor(t *testing.T) {
+	r := Weekly(2, Monday, Friday)
+	if r.Frequency != FrequencyWeekly {
+		t.Errorf("Frequency = %d, want %d", r.Frequency, FrequencyWeekly)
+	}
+	if r.Interval != 2 {
+		t.Errorf("Interval = %d, want 2", r.Interval)
+	}
+	if len(r.DaysOfTheWeek) != 2 {
+		t.Fatalf("DaysOfTheWeek count = %d, want 2", len(r.DaysOfTheWeek))
+	}
+	if r.DaysOfTheWeek[0].DayOfTheWeek != Monday {
+		t.Errorf("DaysOfTheWeek[0] = %d, want %d (Monday)", r.DaysOfTheWeek[0].DayOfTheWeek, Monday)
+	}
+	if r.DaysOfTheWeek[1].DayOfTheWeek != Friday {
+		t.Errorf("DaysOfTheWeek[1] = %d, want %d (Friday)", r.DaysOfTheWeek[1].DayOfTheWeek, Friday)
+	}
+}
+
+func TestWeeklyConstructorNoDays(t *testing.T) {
+	r := Weekly(1)
+	if r.Frequency != FrequencyWeekly {
+		t.Errorf("Frequency = %d, want %d", r.Frequency, FrequencyWeekly)
+	}
+	if len(r.DaysOfTheWeek) != 0 {
+		t.Errorf("DaysOfTheWeek should be empty, got %d", len(r.DaysOfTheWeek))
+	}
+}
+
+func TestMonthlyConstructor(t *testing.T) {
+	r := Monthly(1, 1, 15)
+	if r.Frequency != FrequencyMonthly {
+		t.Errorf("Frequency = %d, want %d", r.Frequency, FrequencyMonthly)
+	}
+	if r.Interval != 1 {
+		t.Errorf("Interval = %d, want 1", r.Interval)
+	}
+	if len(r.DaysOfTheMonth) != 2 {
+		t.Fatalf("DaysOfTheMonth count = %d, want 2", len(r.DaysOfTheMonth))
+	}
+	if r.DaysOfTheMonth[0] != 1 || r.DaysOfTheMonth[1] != 15 {
+		t.Errorf("DaysOfTheMonth = %v, want [1 15]", r.DaysOfTheMonth)
+	}
+}
+
+func TestYearlyConstructor(t *testing.T) {
+	r := Yearly(1)
+	if r.Frequency != FrequencyYearly {
+		t.Errorf("Frequency = %d, want %d", r.Frequency, FrequencyYearly)
+	}
+	if r.Interval != 1 {
+		t.Errorf("Interval = %d, want 1", r.Interval)
+	}
+}
+
+func TestUntilChain(t *testing.T) {
+	end := time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC)
+	r := Daily(1).Until(end)
+	if r.End == nil {
+		t.Fatal("End should not be nil")
+	}
+	if r.End.EndDate == nil {
+		t.Fatal("EndDate should not be nil")
+	}
+	if !r.End.EndDate.Equal(end) {
+		t.Errorf("EndDate = %v, want %v", r.End.EndDate, end)
+	}
+	if r.End.OccurrenceCount != 0 {
+		t.Errorf("OccurrenceCount = %d, want 0", r.End.OccurrenceCount)
+	}
+}
+
+func TestCountChain(t *testing.T) {
+	r := Weekly(1, Monday).Count(10)
+	if r.End == nil {
+		t.Fatal("End should not be nil")
+	}
+	if r.End.OccurrenceCount != 10 {
+		t.Errorf("OccurrenceCount = %d, want 10", r.End.OccurrenceCount)
+	}
+	if r.End.EndDate != nil {
+		t.Error("EndDate should be nil for count-based")
+	}
+}
+
+// --- Recurrence rule enum values match EventKit ---
+
+func TestRecurrenceEnumValues(t *testing.T) {
+	if FrequencyDaily != 0 {
+		t.Errorf("FrequencyDaily = %d, want 0", FrequencyDaily)
+	}
+	if FrequencyWeekly != 1 {
+		t.Errorf("FrequencyWeekly = %d, want 1", FrequencyWeekly)
+	}
+	if FrequencyMonthly != 2 {
+		t.Errorf("FrequencyMonthly = %d, want 2", FrequencyMonthly)
+	}
+	if FrequencyYearly != 3 {
+		t.Errorf("FrequencyYearly = %d, want 3", FrequencyYearly)
+	}
+
+	// EKWeekday values
+	if Sunday != 1 {
+		t.Errorf("Sunday = %d, want 1", Sunday)
+	}
+	if Monday != 2 {
+		t.Errorf("Monday = %d, want 2", Monday)
+	}
+	if Saturday != 7 {
+		t.Errorf("Saturday = %d, want 7", Saturday)
+	}
+}
+
+// --- Recurrence rule parsing tests ---
+
+func TestParseEventJSONWithRecurrenceRules(t *testing.T) {
+	t.Run("daily recurrence", func(t *testing.T) {
+		jsonStr := `{
+			"id": "REC-DAILY",
+			"title": "Daily Standup",
+			"startDate": "2026-02-11T10:00:00.000Z",
+			"endDate": "2026-02-11T10:30:00.000Z",
+			"allDay": false,
+			"calendar": "Work",
+			"calendarID": "cal-1",
+			"status": 1,
+			"availability": 0,
+			"recurring": true,
+			"isDetached": false,
+			"recurrenceRules": [
+				{
+					"frequency": 0,
+					"interval": 1
+				}
+			],
+			"attendees": [],
+			"alerts": []
+		}`
+
+		event, err := parseEventJSON(jsonStr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if !event.Recurring {
+			t.Error("Recurring should be true")
+		}
+		if event.IsDetached {
+			t.Error("IsDetached should be false")
+		}
+		if len(event.RecurrenceRules) != 1 {
+			t.Fatalf("RecurrenceRules count = %d, want 1", len(event.RecurrenceRules))
+		}
+
+		rule := event.RecurrenceRules[0]
+		if rule.Frequency != FrequencyDaily {
+			t.Errorf("Frequency = %d, want %d (daily)", rule.Frequency, FrequencyDaily)
+		}
+		if rule.Interval != 1 {
+			t.Errorf("Interval = %d, want 1", rule.Interval)
+		}
+		if rule.End != nil {
+			t.Error("End should be nil (recurs forever)")
+		}
+	})
+
+	t.Run("weekly with days and count end", func(t *testing.T) {
+		jsonStr := `{
+			"id": "REC-WEEKLY",
+			"title": "MWF Meeting",
+			"startDate": "2026-02-11T10:00:00.000Z",
+			"endDate": "2026-02-11T10:30:00.000Z",
+			"allDay": false,
+			"calendar": "Work",
+			"calendarID": "cal-1",
+			"status": 1,
+			"availability": 0,
+			"recurring": true,
+			"isDetached": false,
+			"recurrenceRules": [
+				{
+					"frequency": 1,
+					"interval": 2,
+					"daysOfTheWeek": [
+						{"dayOfTheWeek": 2, "weekNumber": 0},
+						{"dayOfTheWeek": 4, "weekNumber": 0},
+						{"dayOfTheWeek": 6, "weekNumber": 0}
+					],
+					"end": {
+						"occurrenceCount": 10
+					}
+				}
+			],
+			"attendees": [],
+			"alerts": []
+		}`
+
+		event, err := parseEventJSON(jsonStr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		rule := event.RecurrenceRules[0]
+		if rule.Frequency != FrequencyWeekly {
+			t.Errorf("Frequency = %d, want %d (weekly)", rule.Frequency, FrequencyWeekly)
+		}
+		if rule.Interval != 2 {
+			t.Errorf("Interval = %d, want 2", rule.Interval)
+		}
+		if len(rule.DaysOfTheWeek) != 3 {
+			t.Fatalf("DaysOfTheWeek count = %d, want 3", len(rule.DaysOfTheWeek))
+		}
+		if rule.DaysOfTheWeek[0].DayOfTheWeek != Monday {
+			t.Errorf("DaysOfTheWeek[0] = %d, want %d (Monday)", rule.DaysOfTheWeek[0].DayOfTheWeek, Monday)
+		}
+		if rule.DaysOfTheWeek[1].DayOfTheWeek != Wednesday {
+			t.Errorf("DaysOfTheWeek[1] = %d, want %d (Wednesday)", rule.DaysOfTheWeek[1].DayOfTheWeek, Wednesday)
+		}
+		if rule.DaysOfTheWeek[2].DayOfTheWeek != Friday {
+			t.Errorf("DaysOfTheWeek[2] = %d, want %d (Friday)", rule.DaysOfTheWeek[2].DayOfTheWeek, Friday)
+		}
+		if rule.End == nil {
+			t.Fatal("End should not be nil")
+		}
+		if rule.End.OccurrenceCount != 10 {
+			t.Errorf("OccurrenceCount = %d, want 10", rule.End.OccurrenceCount)
+		}
+	})
+
+	t.Run("monthly with days of month and date end", func(t *testing.T) {
+		jsonStr := `{
+			"id": "REC-MONTHLY",
+			"title": "Monthly Review",
+			"startDate": "2026-02-15T14:00:00.000Z",
+			"endDate": "2026-02-15T15:00:00.000Z",
+			"allDay": false,
+			"calendar": "Work",
+			"calendarID": "cal-1",
+			"status": 1,
+			"availability": 0,
+			"recurring": true,
+			"isDetached": false,
+			"recurrenceRules": [
+				{
+					"frequency": 2,
+					"interval": 1,
+					"daysOfTheMonth": [1, 15, -1],
+					"end": {
+						"endDate": "2026-12-31T00:00:00.000Z"
+					}
+				}
+			],
+			"attendees": [],
+			"alerts": []
+		}`
+
+		event, err := parseEventJSON(jsonStr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		rule := event.RecurrenceRules[0]
+		if rule.Frequency != FrequencyMonthly {
+			t.Errorf("Frequency = %d, want %d (monthly)", rule.Frequency, FrequencyMonthly)
+		}
+		if len(rule.DaysOfTheMonth) != 3 {
+			t.Fatalf("DaysOfTheMonth count = %d, want 3", len(rule.DaysOfTheMonth))
+		}
+		if rule.DaysOfTheMonth[2] != -1 {
+			t.Errorf("DaysOfTheMonth[2] = %d, want -1 (last day)", rule.DaysOfTheMonth[2])
+		}
+		if rule.End == nil {
+			t.Fatal("End should not be nil")
+		}
+		if rule.End.EndDate == nil {
+			t.Fatal("EndDate should not be nil")
+		}
+		wantEnd := time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC)
+		if !rule.End.EndDate.Equal(wantEnd) {
+			t.Errorf("EndDate = %v, want %v", rule.End.EndDate, wantEnd)
+		}
+	})
+
+	t.Run("yearly with months and set positions", func(t *testing.T) {
+		jsonStr := `{
+			"id": "REC-YEARLY",
+			"title": "Annual Review",
+			"startDate": "2026-03-15T09:00:00.000Z",
+			"endDate": "2026-03-15T10:00:00.000Z",
+			"allDay": false,
+			"calendar": "Work",
+			"calendarID": "cal-1",
+			"status": 1,
+			"availability": 0,
+			"recurring": true,
+			"isDetached": false,
+			"recurrenceRules": [
+				{
+					"frequency": 3,
+					"interval": 1,
+					"monthsOfTheYear": [3, 9],
+					"daysOfTheWeek": [
+						{"dayOfTheWeek": 2, "weekNumber": 0},
+						{"dayOfTheWeek": 3, "weekNumber": 0},
+						{"dayOfTheWeek": 4, "weekNumber": 0},
+						{"dayOfTheWeek": 5, "weekNumber": 0},
+						{"dayOfTheWeek": 6, "weekNumber": 0}
+					],
+					"setPositions": [-1]
+				}
+			],
+			"attendees": [],
+			"alerts": []
+		}`
+
+		event, err := parseEventJSON(jsonStr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		rule := event.RecurrenceRules[0]
+		if rule.Frequency != FrequencyYearly {
+			t.Errorf("Frequency = %d, want %d (yearly)", rule.Frequency, FrequencyYearly)
+		}
+		if len(rule.MonthsOfTheYear) != 2 {
+			t.Fatalf("MonthsOfTheYear count = %d, want 2", len(rule.MonthsOfTheYear))
+		}
+		if rule.MonthsOfTheYear[0] != 3 || rule.MonthsOfTheYear[1] != 9 {
+			t.Errorf("MonthsOfTheYear = %v, want [3, 9]", rule.MonthsOfTheYear)
+		}
+		if len(rule.SetPositions) != 1 || rule.SetPositions[0] != -1 {
+			t.Errorf("SetPositions = %v, want [-1]", rule.SetPositions)
+		}
+	})
+
+	t.Run("detached occurrence with occurrence date", func(t *testing.T) {
+		jsonStr := `{
+			"id": "REC-DETACHED",
+			"title": "Modified Standup",
+			"startDate": "2026-02-11T14:00:00.000Z",
+			"endDate": "2026-02-11T14:30:00.000Z",
+			"allDay": false,
+			"calendar": "Work",
+			"calendarID": "cal-1",
+			"status": 1,
+			"availability": 0,
+			"recurring": true,
+			"isDetached": true,
+			"occurrenceDate": "2026-02-11T10:00:00.000Z",
+			"recurrenceRules": [],
+			"attendees": [],
+			"alerts": []
+		}`
+
+		event, err := parseEventJSON(jsonStr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if !event.IsDetached {
+			t.Error("IsDetached should be true")
+		}
+		if event.OccurrenceDate == nil {
+			t.Fatal("OccurrenceDate should not be nil")
+		}
+		wantOcc := time.Date(2026, 2, 11, 10, 0, 0, 0, time.UTC)
+		if !event.OccurrenceDate.Equal(wantOcc) {
+			t.Errorf("OccurrenceDate = %v, want %v", event.OccurrenceDate, wantOcc)
+		}
+	})
+
+	t.Run("empty recurrence rules", func(t *testing.T) {
+		jsonStr := `{
+			"id": "NO-REC",
+			"title": "One-off Event",
+			"startDate": "2026-02-11T10:00:00.000Z",
+			"endDate": "2026-02-11T11:00:00.000Z",
+			"allDay": false,
+			"calendar": "Work",
+			"calendarID": "cal-1",
+			"status": 0,
+			"availability": 0,
+			"recurring": false,
+			"isDetached": false,
+			"recurrenceRules": [],
+			"attendees": [],
+			"alerts": []
+		}`
+
+		event, err := parseEventJSON(jsonStr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if event.Recurring {
+			t.Error("Recurring should be false")
+		}
+		if len(event.RecurrenceRules) != 0 {
+			t.Errorf("RecurrenceRules should be empty, got %d", len(event.RecurrenceRules))
+		}
+		if event.IsDetached {
+			t.Error("IsDetached should be false")
+		}
+		if event.OccurrenceDate != nil {
+			t.Error("OccurrenceDate should be nil")
+		}
+	})
+}
+
+// --- Structured location parsing tests ---
+
+func TestParseEventJSONWithStructuredLocation(t *testing.T) {
+	t.Run("full structured location", func(t *testing.T) {
+		jsonStr := `{
+			"id": "LOC-1",
+			"title": "Meeting at Apple Park",
+			"startDate": "2026-02-11T10:00:00.000Z",
+			"endDate": "2026-02-11T11:00:00.000Z",
+			"allDay": false,
+			"location": "Apple Park",
+			"calendar": "Work",
+			"calendarID": "cal-1",
+			"status": 0,
+			"availability": 0,
+			"recurring": false,
+			"isDetached": false,
+			"recurrenceRules": [],
+			"structuredLocation": {
+				"title": "Apple Park",
+				"latitude": 37.3349,
+				"longitude": -122.0090,
+				"radius": 150.0
+			},
+			"attendees": [],
+			"alerts": []
+		}`
+
+		event, err := parseEventJSON(jsonStr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if event.StructuredLocation == nil {
+			t.Fatal("StructuredLocation should not be nil")
+		}
+		sl := event.StructuredLocation
+		if sl.Title != "Apple Park" {
+			t.Errorf("Title = %q, want %q", sl.Title, "Apple Park")
+		}
+		if sl.Latitude != 37.3349 {
+			t.Errorf("Latitude = %f, want 37.3349", sl.Latitude)
+		}
+		if sl.Longitude != -122.0090 {
+			t.Errorf("Longitude = %f, want -122.0090", sl.Longitude)
+		}
+		if sl.Radius != 150.0 {
+			t.Errorf("Radius = %f, want 150.0", sl.Radius)
+		}
+	})
+
+	t.Run("title-only structured location", func(t *testing.T) {
+		jsonStr := `{
+			"id": "LOC-2",
+			"title": "Meeting",
+			"startDate": "2026-02-11T10:00:00.000Z",
+			"endDate": "2026-02-11T11:00:00.000Z",
+			"allDay": false,
+			"calendar": "Work",
+			"calendarID": "cal-1",
+			"status": 0,
+			"availability": 0,
+			"recurring": false,
+			"isDetached": false,
+			"recurrenceRules": [],
+			"structuredLocation": {
+				"title": "Conference Room B"
+			},
+			"attendees": [],
+			"alerts": []
+		}`
+
+		event, err := parseEventJSON(jsonStr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if event.StructuredLocation == nil {
+			t.Fatal("StructuredLocation should not be nil")
+		}
+		sl := event.StructuredLocation
+		if sl.Title != "Conference Room B" {
+			t.Errorf("Title = %q, want %q", sl.Title, "Conference Room B")
+		}
+		if sl.Latitude != 0 {
+			t.Errorf("Latitude = %f, want 0", sl.Latitude)
+		}
+		if sl.Longitude != 0 {
+			t.Errorf("Longitude = %f, want 0", sl.Longitude)
+		}
+	})
+
+	t.Run("nil structured location", func(t *testing.T) {
+		jsonStr := `{
+			"id": "LOC-3",
+			"title": "No Location",
+			"startDate": "2026-02-11T10:00:00.000Z",
+			"endDate": "2026-02-11T11:00:00.000Z",
+			"allDay": false,
+			"calendar": "Work",
+			"calendarID": "cal-1",
+			"status": 0,
+			"availability": 0,
+			"recurring": false,
+			"isDetached": false,
+			"recurrenceRules": [],
+			"attendees": [],
+			"alerts": []
+		}`
+
+		event, err := parseEventJSON(jsonStr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if event.StructuredLocation != nil {
+			t.Error("StructuredLocation should be nil")
+		}
+	})
+}
+
+// --- Marshal tests for recurrence rules and locations ---
+
+func TestMarshalCreateInputWithRecurrence(t *testing.T) {
+	t.Run("daily recurrence with count", func(t *testing.T) {
+		input := CreateEventInput{
+			Title:     "Daily Sync",
+			StartDate: time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC),
+			EndDate:   time.Date(2026, 2, 12, 10, 30, 0, 0, time.UTC),
+			RecurrenceRules: []RecurrenceRule{
+				Daily(1).Count(30),
+			},
+		}
+
+		data, err := marshalCreateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var result map[string]any
+		json.Unmarshal(data, &result)
+
+		rules, ok := result["recurrenceRules"].([]any)
+		if !ok {
+			t.Fatal("recurrenceRules should be present")
+		}
+		if len(rules) != 1 {
+			t.Fatalf("recurrenceRules count = %d, want 1", len(rules))
+		}
+
+		rule := rules[0].(map[string]any)
+		if rule["frequency"] != 0.0 {
+			t.Errorf("frequency = %v, want 0 (daily)", rule["frequency"])
+		}
+		if rule["interval"] != 1.0 {
+			t.Errorf("interval = %v, want 1", rule["interval"])
+		}
+
+		end := rule["end"].(map[string]any)
+		if end["occurrenceCount"] != 30.0 {
+			t.Errorf("occurrenceCount = %v, want 30", end["occurrenceCount"])
+		}
+	})
+
+	t.Run("weekly with days and until", func(t *testing.T) {
+		endDate := time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC)
+		input := CreateEventInput{
+			Title:     "MWF Standup",
+			StartDate: time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC),
+			EndDate:   time.Date(2026, 2, 12, 10, 30, 0, 0, time.UTC),
+			RecurrenceRules: []RecurrenceRule{
+				Weekly(1, Monday, Wednesday, Friday).Until(endDate),
+			},
+		}
+
+		data, err := marshalCreateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var result map[string]any
+		json.Unmarshal(data, &result)
+
+		rules := result["recurrenceRules"].([]any)
+		rule := rules[0].(map[string]any)
+		if rule["frequency"] != 1.0 {
+			t.Errorf("frequency = %v, want 1 (weekly)", rule["frequency"])
+		}
+
+		days := rule["daysOfTheWeek"].([]any)
+		if len(days) != 3 {
+			t.Fatalf("daysOfTheWeek count = %d, want 3", len(days))
+		}
+		day0 := days[0].(map[string]any)
+		if day0["dayOfTheWeek"] != 2.0 {
+			t.Errorf("dayOfTheWeek[0] = %v, want 2 (Monday)", day0["dayOfTheWeek"])
+		}
+
+		end := rule["end"].(map[string]any)
+		if end["endDate"] != "2026-12-31T00:00:00.000Z" {
+			t.Errorf("endDate = %v, want 2026-12-31T00:00:00.000Z", end["endDate"])
+		}
+	})
+
+	t.Run("no recurrence rules omitted", func(t *testing.T) {
+		input := CreateEventInput{
+			Title:     "One-off",
+			StartDate: time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC),
+			EndDate:   time.Date(2026, 2, 12, 11, 0, 0, 0, time.UTC),
+		}
+
+		data, err := marshalCreateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var result map[string]any
+		json.Unmarshal(data, &result)
+
+		if _, ok := result["recurrenceRules"]; ok {
+			t.Error("recurrenceRules should be omitted when empty")
+		}
+	})
+}
+
+func TestMarshalCreateInputWithStructuredLocation(t *testing.T) {
+	t.Run("full structured location", func(t *testing.T) {
+		input := CreateEventInput{
+			Title:     "Apple Park Meeting",
+			StartDate: time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC),
+			EndDate:   time.Date(2026, 2, 12, 11, 0, 0, 0, time.UTC),
+			StructuredLocation: &StructuredLocation{
+				Title:     "Apple Park",
+				Latitude:  37.3349,
+				Longitude: -122.0090,
+				Radius:    150.0,
+			},
+		}
+
+		data, err := marshalCreateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var result map[string]any
+		json.Unmarshal(data, &result)
+
+		sl, ok := result["structuredLocation"].(map[string]any)
+		if !ok {
+			t.Fatal("structuredLocation should be present")
+		}
+		if sl["title"] != "Apple Park" {
+			t.Errorf("title = %v, want Apple Park", sl["title"])
+		}
+		if sl["latitude"] != 37.3349 {
+			t.Errorf("latitude = %v, want 37.3349", sl["latitude"])
+		}
+		if sl["longitude"] != -122.0090 {
+			t.Errorf("longitude = %v, want -122.0090", sl["longitude"])
+		}
+		if sl["radius"] != 150.0 {
+			t.Errorf("radius = %v, want 150.0", sl["radius"])
+		}
+	})
+
+	t.Run("nil structured location omitted", func(t *testing.T) {
+		input := CreateEventInput{
+			Title:     "No Location",
+			StartDate: time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC),
+			EndDate:   time.Date(2026, 2, 12, 11, 0, 0, 0, time.UTC),
+		}
+
+		data, err := marshalCreateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var result map[string]any
+		json.Unmarshal(data, &result)
+
+		if _, ok := result["structuredLocation"]; ok {
+			t.Error("structuredLocation should be omitted when nil")
+		}
+	})
+}
+
+func TestMarshalUpdateInputWithRecurrence(t *testing.T) {
+	t.Run("add recurrence rule", func(t *testing.T) {
+		rules := []RecurrenceRule{Daily(1)}
+		input := UpdateEventInput{
+			RecurrenceRules: &rules,
+		}
+
+		data, err := marshalUpdateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var result map[string]any
+		json.Unmarshal(data, &result)
+
+		rr, ok := result["recurrenceRules"].([]any)
+		if !ok {
+			t.Fatal("recurrenceRules should be present")
+		}
+		if len(rr) != 1 {
+			t.Fatalf("recurrenceRules count = %d, want 1", len(rr))
+		}
+	})
+
+	t.Run("remove recurrence with empty slice", func(t *testing.T) {
+		rules := []RecurrenceRule{}
+		input := UpdateEventInput{
+			RecurrenceRules: &rules,
+		}
+
+		data, err := marshalUpdateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var result map[string]any
+		json.Unmarshal(data, &result)
+
+		rr, ok := result["recurrenceRules"].([]any)
+		if !ok {
+			t.Fatal("recurrenceRules should be present (empty)")
+		}
+		if len(rr) != 0 {
+			t.Errorf("recurrenceRules count = %d, want 0", len(rr))
+		}
+	})
+
+	t.Run("nil recurrence not included", func(t *testing.T) {
+		input := UpdateEventInput{}
+
+		data, err := marshalUpdateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var result map[string]any
+		json.Unmarshal(data, &result)
+
+		if _, ok := result["recurrenceRules"]; ok {
+			t.Error("recurrenceRules should not be present when nil")
+		}
+	})
+}
+
+func TestMarshalUpdateInputWithStructuredLocation(t *testing.T) {
+	t.Run("update structured location", func(t *testing.T) {
+		input := UpdateEventInput{
+			StructuredLocation: &StructuredLocation{
+				Title:     "New Location",
+				Latitude:  40.7128,
+				Longitude: -74.0060,
+			},
+		}
+
+		data, err := marshalUpdateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var result map[string]any
+		json.Unmarshal(data, &result)
+
+		sl, ok := result["structuredLocation"].(map[string]any)
+		if !ok {
+			t.Fatal("structuredLocation should be present")
+		}
+		if sl["title"] != "New Location" {
+			t.Errorf("title = %v", sl["title"])
+		}
+		if sl["latitude"] != 40.7128 {
+			t.Errorf("latitude = %v", sl["latitude"])
+		}
+	})
+}
+
 // --- Large event set parsing ---
 
 func TestLargeEventSet(t *testing.T) {
