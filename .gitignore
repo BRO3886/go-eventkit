@@ -1,0 +1,8 @@
+# Binaries
+integration
+*.exe
+*.test
+*.out
+
+# Coverage
+coverage.out
