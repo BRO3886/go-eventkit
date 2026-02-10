@@ -279,7 +279,186 @@ func main() {
 		}
 	}
 
-	// --- Test 16: Get non-existent event ---
+	// --- Test 16: Create event with daily recurrence ---
+	dailyRecStart := testStart.Add(7 * time.Hour)
+	dailyRecEnd := dailyRecStart.Add(30 * time.Minute)
+	dailyRecEvent, err := client.CreateEvent(calendar.CreateEventInput{
+		Title:     "[go-eventkit test] Daily Recurring",
+		StartDate: dailyRecStart,
+		EndDate:   dailyRecEnd,
+		Calendar:  "Home",
+		Notes:     "Created by go-eventkit integration test. Safe to delete.",
+		RecurrenceRules: []calendar.RecurrenceRule{
+			calendar.Daily(1).Count(5),
+		},
+	})
+	check("Create event with daily recurrence", err)
+
+	var dailyRecEventID string
+	if err == nil {
+		dailyRecEventID = dailyRecEvent.ID
+		log.Printf("  Created daily recurring event: %q, Recurring=%v", dailyRecEvent.Title, dailyRecEvent.Recurring)
+		if !dailyRecEvent.Recurring {
+			log.Printf("  FAIL: Recurring should be true")
+			failed++
+		}
+		if len(dailyRecEvent.RecurrenceRules) != 1 {
+			log.Printf("  FAIL: RecurrenceRules count = %d, want 1", len(dailyRecEvent.RecurrenceRules))
+			failed++
+		} else {
+			rule := dailyRecEvent.RecurrenceRules[0]
+			if rule.Frequency != calendar.FrequencyDaily {
+				log.Printf("  FAIL: Frequency = %d, want %d (daily)", rule.Frequency, calendar.FrequencyDaily)
+				failed++
+			}
+			if rule.Interval != 1 {
+				log.Printf("  FAIL: Interval = %d, want 1", rule.Interval)
+				failed++
+			}
+			if rule.End == nil || rule.End.OccurrenceCount != 5 {
+				log.Printf("  FAIL: End = %+v, want OccurrenceCount=5", rule.End)
+				failed++
+			}
+			log.Printf("  Verified recurrence rule: daily, interval=1, count=5")
+		}
+	}
+
+	// --- Test 17: Create event with weekly recurrence on Mon/Wed/Fri ---
+	weeklyRecStart := testStart.Add(8 * time.Hour)
+	weeklyRecEnd := weeklyRecStart.Add(30 * time.Minute)
+	endDate := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 0, 0, 0, 0, time.Local).Add(30 * 24 * time.Hour)
+	weeklyRecEvent, err := client.CreateEvent(calendar.CreateEventInput{
+		Title:     "[go-eventkit test] Weekly MWF Meeting",
+		StartDate: weeklyRecStart,
+		EndDate:   weeklyRecEnd,
+		Calendar:  "Home",
+		Notes:     "Created by go-eventkit integration test. Safe to delete.",
+		RecurrenceRules: []calendar.RecurrenceRule{
+			calendar.Weekly(2, calendar.Monday, calendar.Wednesday, calendar.Friday).Until(endDate),
+		},
+	})
+	check("Create event with weekly recurrence (MWF every 2 weeks)", err)
+
+	var weeklyRecEventID string
+	if err == nil {
+		weeklyRecEventID = weeklyRecEvent.ID
+		log.Printf("  Created weekly recurring event: %q, Recurring=%v", weeklyRecEvent.Title, weeklyRecEvent.Recurring)
+		if len(weeklyRecEvent.RecurrenceRules) == 1 {
+			rule := weeklyRecEvent.RecurrenceRules[0]
+			if rule.Frequency != calendar.FrequencyWeekly {
+				log.Printf("  FAIL: Frequency = %d, want %d (weekly)", rule.Frequency, calendar.FrequencyWeekly)
+				failed++
+			}
+			if rule.Interval != 2 {
+				log.Printf("  FAIL: Interval = %d, want 2", rule.Interval)
+				failed++
+			}
+			if len(rule.DaysOfTheWeek) != 3 {
+				log.Printf("  FAIL: DaysOfTheWeek count = %d, want 3", len(rule.DaysOfTheWeek))
+				failed++
+			}
+			if rule.End == nil || rule.End.EndDate == nil {
+				log.Printf("  FAIL: End should have EndDate")
+				failed++
+			}
+			log.Printf("  Verified recurrence rule: weekly(2), MWF, until=%v", endDate)
+		}
+	}
+
+	// --- Test 18: Create event with structured location ---
+	locEvent, err := client.CreateEvent(calendar.CreateEventInput{
+		Title:     "[go-eventkit test] Location Event",
+		StartDate: testStart.Add(9 * time.Hour),
+		EndDate:   testStart.Add(10 * time.Hour),
+		Calendar:  "Home",
+		Notes:     "Created by go-eventkit integration test. Safe to delete.",
+		StructuredLocation: &calendar.StructuredLocation{
+			Title:     "Apple Park",
+			Latitude:  37.3349,
+			Longitude: -122.0090,
+			Radius:    150.0,
+		},
+	})
+	check("Create event with structured location", err)
+
+	var locEventID string
+	if err == nil {
+		locEventID = locEvent.ID
+		log.Printf("  Created location event: %q", locEvent.Title)
+		if locEvent.StructuredLocation == nil {
+			log.Printf("  WARN: StructuredLocation is nil on returned event (EventKit may not populate immediately)")
+		} else {
+			sl := locEvent.StructuredLocation
+			log.Printf("  StructuredLocation: title=%q, lat=%f, long=%f, radius=%f",
+				sl.Title, sl.Latitude, sl.Longitude, sl.Radius)
+		}
+	}
+
+	// --- Test 19: Read back location event and verify coordinates ---
+	if locEventID != "" {
+		readBackLoc, err := client.Event(locEventID)
+		check("Read back location event", err)
+		if err == nil && readBackLoc.StructuredLocation != nil {
+			sl := readBackLoc.StructuredLocation
+			if sl.Latitude < 37.33 || sl.Latitude > 37.34 {
+				log.Printf("  FAIL: Latitude = %f, expected ~37.3349", sl.Latitude)
+				failed++
+			} else {
+				log.Printf("  Verified latitude: %f", sl.Latitude)
+			}
+			if sl.Longitude < -122.01 || sl.Longitude > -122.00 {
+				log.Printf("  FAIL: Longitude = %f, expected ~-122.009", sl.Longitude)
+				failed++
+			} else {
+				log.Printf("  Verified longitude: %f", sl.Longitude)
+			}
+		}
+	}
+
+	// --- Test 20: Update event to add recurrence rule ---
+	if createdID != "" {
+		addRules := []calendar.RecurrenceRule{calendar.Daily(1).Count(3)}
+		updated, err := client.UpdateEvent(createdID, calendar.UpdateEventInput{
+			RecurrenceRules: &addRules,
+		}, calendar.SpanThisEvent)
+		check("Update event: add recurrence rule", err)
+		if err == nil {
+			if !updated.Recurring {
+				log.Printf("  FAIL: Recurring should be true after adding rule")
+				failed++
+			} else {
+				log.Printf("  Event now recurring: %v", updated.Recurring)
+			}
+		}
+	}
+
+	// --- Test 21: Update event to remove recurrence ---
+	if createdID != "" {
+		emptyRules := []calendar.RecurrenceRule{}
+		updated, err := client.UpdateEvent(createdID, calendar.UpdateEventInput{
+			RecurrenceRules: &emptyRules,
+		}, calendar.SpanThisEvent)
+		check("Update event: remove recurrence (empty slice)", err)
+		if err == nil {
+			if updated.Recurring {
+				log.Printf("  FAIL: Recurring should be false after removing rules")
+				failed++
+			} else {
+				log.Printf("  Event no longer recurring: %v", updated.Recurring)
+			}
+		}
+	}
+
+	// --- Test 22: Delete single occurrence of recurring event (SpanThisEvent) ---
+	if dailyRecEventID != "" {
+		err := client.DeleteEvent(dailyRecEventID, calendar.SpanThisEvent)
+		check("Delete single occurrence of recurring event", err)
+		if err == nil {
+			log.Printf("  Deleted single occurrence of daily recurring event")
+		}
+	}
+
+	// --- Test 23: Get non-existent event ---
 	_, err = client.Event("non-existent-event-id-12345")
 	if err != nil {
 		log.Printf("PASS: Get non-existent event returns error: %v", err)
@@ -291,12 +470,12 @@ func main() {
 
 	// --- Cleanup: Delete all test events ---
 	log.Println("\n--- Cleanup ---")
-	cleanupIDs := []string{createdID, workEventID, familyEventID, tzEventID, urlEventID, alertEventID}
+	cleanupIDs := []string{createdID, workEventID, familyEventID, tzEventID, urlEventID, alertEventID, weeklyRecEventID, locEventID}
 	for _, id := range cleanupIDs {
 		if id == "" {
 			continue
 		}
-		err := client.DeleteEvent(id, calendar.SpanThisEvent)
+		err := client.DeleteEvent(id, calendar.SpanFutureEvents)
 		if err != nil {
 			log.Printf("WARN: Failed to delete event %s: %v", id, err)
 		} else {
@@ -304,7 +483,7 @@ func main() {
 		}
 	}
 
-	// --- Test 17: Verify deleted event is gone ---
+	// --- Test 24: Verify deleted event is gone ---
 	if createdID != "" {
 		_, err := client.Event(createdID)
 		if err != nil {
