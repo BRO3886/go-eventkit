@@ -185,7 +185,7 @@ static NSDictionary* calendar_to_dict(EKCalendar* cal) {
     d[@"title"] = cal.title ?: @"";
     d[@"type"] = @(cal.type);
     d[@"source"] = cal.source.title ?: @"";
-    d[@"readOnly"] = @(!cal.allowsContentModifications);
+    d[@"readOnly"] = cal.allowsContentModifications ? @NO : @YES;
 
     // Color as hex string.
     if (cal.color) {

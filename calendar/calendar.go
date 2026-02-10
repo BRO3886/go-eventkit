@@ -156,8 +156,8 @@ const (
 	CalendarTypeLocal        CalendarType = 0
 	CalendarTypeCalDAV       CalendarType = 1
 	CalendarTypeExchange     CalendarType = 2
+	CalendarTypeSubscription CalendarType = 3
 	CalendarTypeBirthday     CalendarType = 4
-	CalendarTypeSubscription CalendarType = 5
 )
 
 // String returns a human-readable representation of the calendar type.

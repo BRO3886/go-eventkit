@@ -481,7 +481,7 @@ func TestParseCalendarsJSON(t *testing.T) {
 		jsonStr := `[
 			{"id": "cal-1", "title": "Work", "type": 1, "color": "#FF0000", "source": "iCloud", "readOnly": false},
 			{"id": "cal-2", "title": "Home", "type": 1, "color": "#00FF00", "source": "iCloud", "readOnly": false},
-			{"id": "cal-3", "title": "Holidays", "type": 5, "color": "#0000FF", "source": "Subscriptions", "readOnly": true},
+			{"id": "cal-3", "title": "Holidays", "type": 3, "color": "#0000FF", "source": "Subscriptions", "readOnly": true},
 			{"id": "cal-4", "title": "Birthdays", "type": 4, "color": "#FFFF00", "source": "Other", "readOnly": true}
 		]`
 
@@ -1201,11 +1201,11 @@ func TestEnumValues(t *testing.T) {
 	if CalendarTypeExchange != 2 {
 		t.Errorf("CalendarTypeExchange = %d, want 2", CalendarTypeExchange)
 	}
+	if CalendarTypeSubscription != 3 {
+		t.Errorf("CalendarTypeSubscription = %d, want 3", CalendarTypeSubscription)
+	}
 	if CalendarTypeBirthday != 4 {
 		t.Errorf("CalendarTypeBirthday = %d, want 4", CalendarTypeBirthday)
-	}
-	if CalendarTypeSubscription != 5 {
-		t.Errorf("CalendarTypeSubscription = %d, want 5", CalendarTypeSubscription)
 	}
 
 	// EKParticipantStatus
