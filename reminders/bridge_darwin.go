@@ -14,9 +14,11 @@ import (
 	"unsafe"
 )
 
-// New creates a new Reminders client.
-// Requests full reminder access on first use (TCC prompt).
-// Returns ErrAccessDenied if the user denies access.
+// New creates a new Reminders [Client] and requests reminders access.
+//
+// On first call, macOS displays a TCC prompt requesting reminders access.
+// Returns [ErrAccessDenied] if the user denies access.
+// Returns [ErrUnsupported] on non-darwin platforms.
 func New() (*Client, error) {
 	granted := C.ek_rem_request_access()
 	if granted == 0 {
@@ -25,7 +27,7 @@ func New() (*Client, error) {
 	return &Client{}, nil
 }
 
-// Lists returns all reminder lists.
+// Lists returns all reminder lists across all accounts (iCloud, Exchange, etc.).
 func (c *Client) Lists() ([]List, error) {
 	cstr := C.ek_rem_fetch_lists()
 	if cstr == nil {
@@ -35,7 +37,9 @@ func (c *Client) Lists() ([]List, error) {
 	return parseListsJSON(C.GoString(cstr))
 }
 
-// Reminders returns reminders matching the given options.
+// Reminders returns reminders matching the given filter options.
+// With no options, returns all reminders across all lists.
+// Options can filter by list, completion status, search query, and due date range.
 func (c *Client) Reminders(opts ...ListOption) ([]Reminder, error) {
 	o := applyOptions(opts)
 
@@ -82,7 +86,9 @@ func (c *Client) Reminders(opts ...ListOption) ([]Reminder, error) {
 	return parseRemindersJSON(C.GoString(cstr))
 }
 
-// Reminder returns a single reminder by ID (full or prefix).
+// Reminder returns a single reminder by ID.
+// Accepts a full identifier or a unique prefix (e.g., first 8 characters).
+// Returns [ErrNotFound] if no reminder matches.
 func (c *Client) Reminder(id string) (*Reminder, error) {
 	cID := C.CString(id)
 	defer C.free(unsafe.Pointer(cID))
@@ -96,7 +102,8 @@ func (c *Client) Reminder(id string) (*Reminder, error) {
 	return parseReminderJSON(C.GoString(cstr))
 }
 
-// CreateReminder creates a new reminder.
+// CreateReminder creates a new reminder and returns it with its assigned ID.
+// The reminder is saved to the EventKit store immediately.
 func (c *Client) CreateReminder(input CreateReminderInput) (*Reminder, error) {
 	jsonStr, err := marshalCreateInput(input)
 	if err != nil {
@@ -114,7 +121,9 @@ func (c *Client) CreateReminder(input CreateReminderInput) (*Reminder, error) {
 	return parseReminderJSON(C.GoString(cstr))
 }
 
-// UpdateReminder updates an existing reminder.
+// UpdateReminder updates an existing reminder and returns the updated version.
+// Only non-nil fields in the input are modified. Returns [ErrNotFound] if the
+// reminder does not exist.
 func (c *Client) UpdateReminder(id string, input UpdateReminderInput) (*Reminder, error) {
 	jsonStr, err := marshalUpdateInput(input)
 	if err != nil {
@@ -134,7 +143,8 @@ func (c *Client) UpdateReminder(id string, input UpdateReminderInput) (*Reminder
 	return parseReminderJSON(C.GoString(cstr))
 }
 
-// DeleteReminder deletes a reminder by ID.
+// DeleteReminder permanently deletes a reminder by ID.
+// Returns [ErrNotFound] if the reminder does not exist.
 func (c *Client) DeleteReminder(id string) error {
 	cID := C.CString(id)
 	defer C.free(unsafe.Pointer(cID))
@@ -147,7 +157,9 @@ func (c *Client) DeleteReminder(id string) error {
 	return nil
 }
 
-// CompleteReminder marks a reminder as completed.
+// CompleteReminder marks a reminder as completed and returns the updated version.
+// Sets [Reminder.Completed] to true and [Reminder.CompletionDate] to now.
+// Returns [ErrNotFound] if the reminder does not exist.
 func (c *Client) CompleteReminder(id string) (*Reminder, error) {
 	cID := C.CString(id)
 	defer C.free(unsafe.Pointer(cID))
@@ -160,7 +172,9 @@ func (c *Client) CompleteReminder(id string) (*Reminder, error) {
 	return parseReminderJSON(C.GoString(cstr))
 }
 
-// UncompleteReminder marks a reminder as incomplete.
+// UncompleteReminder marks a reminder as incomplete and returns the updated version.
+// Sets [Reminder.Completed] to false and clears [Reminder.CompletionDate].
+// Returns [ErrNotFound] if the reminder does not exist.
 func (c *Client) UncompleteReminder(id string) (*Reminder, error) {
 	cID := C.CString(id)
 	defer C.free(unsafe.Pointer(cID))

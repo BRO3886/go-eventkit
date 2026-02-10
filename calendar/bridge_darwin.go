@@ -16,8 +16,11 @@ import (
 	"unsafe"
 )
 
-// New creates a new Calendar client and requests calendar access (TCC prompt).
-// Returns an error if calendar access is denied or if not running on macOS.
+// New creates a new Calendar [Client] and requests calendar access.
+//
+// On first call, macOS displays a TCC prompt requesting calendar access.
+// Returns [ErrAccessDenied] if the user denies access.
+// Returns [ErrUnsupported] on non-darwin platforms.
 func New() (*Client, error) {
 	granted := C.ek_cal_request_access()
 	if granted == 0 {
@@ -34,7 +37,8 @@ func New() (*Client, error) {
 	return &Client{}, nil
 }
 
-// Calendars returns all calendars for events.
+// Calendars returns all calendars for events across all accounts
+// (iCloud, Google, Exchange, local, subscribed, birthdays).
 func (c *Client) Calendars() ([]Calendar, error) {
 	cstr := C.ek_cal_fetch_calendars()
 	if cstr == nil {
@@ -47,7 +51,8 @@ func (c *Client) Calendars() ([]Calendar, error) {
 }
 
 // Events returns events within the given time range.
-// Options can filter by calendar, search query, etc.
+// EventKit requires a bounded date range — this method cannot fetch all events.
+// Options can filter by calendar name, calendar ID, or search query.
 func (c *Client) Events(start, end time.Time, opts ...ListOption) ([]Event, error) {
 	o := applyOptions(opts)
 
@@ -81,7 +86,8 @@ func (c *Client) Events(start, end time.Time, opts ...ListOption) ([]Event, erro
 	return parseEventsJSON(jsonStr)
 }
 
-// Event returns a single event by ID (full ID or prefix).
+// Event returns a single event by its stable event identifier
+// (EKEvent.eventIdentifier). Returns [ErrNotFound] if no event matches.
 func (c *Client) Event(id string) (*Event, error) {
 	cID := C.CString(id)
 	defer C.free(unsafe.Pointer(cID))
@@ -100,7 +106,8 @@ func (c *Client) Event(id string) (*Event, error) {
 	return parseEventJSON(jsonStr)
 }
 
-// CreateEvent creates a new calendar event.
+// CreateEvent creates a new calendar event and returns it with its assigned ID.
+// The event is saved to the EventKit store immediately.
 func (c *Client) CreateEvent(input CreateEventInput) (*Event, error) {
 	jsonBytes, err := marshalCreateInput(input)
 	if err != nil {
@@ -120,8 +127,10 @@ func (c *Client) CreateEvent(input CreateEventInput) (*Event, error) {
 	return parseEventJSON(jsonStr)
 }
 
-// UpdateEvent updates an existing event.
-// Span controls whether to update just this occurrence or future occurrences too.
+// UpdateEvent updates an existing event and returns the updated version.
+// Only non-nil fields in the input are modified. The span parameter controls
+// whether the change applies to just this occurrence or all future occurrences
+// of a recurring event. Returns [ErrNotFound] if the event does not exist.
 func (c *Client) UpdateEvent(id string, input UpdateEventInput, span Span) (*Event, error) {
 	jsonBytes, err := marshalUpdateInput(input)
 	if err != nil {
@@ -147,8 +156,10 @@ func (c *Client) UpdateEvent(id string, input UpdateEventInput, span Span) (*Eve
 	return parseEventJSON(jsonStr)
 }
 
-// DeleteEvent removes an event.
-// Span controls whether to delete just this occurrence or future occurrences too.
+// DeleteEvent permanently removes an event.
+// The span parameter controls whether the deletion applies to just this
+// occurrence or all future occurrences of a recurring event.
+// Returns [ErrNotFound] if the event does not exist.
 func (c *Client) DeleteEvent(id string, span Span) error {
 	cID := C.CString(id)
 	defer C.free(unsafe.Pointer(cID))

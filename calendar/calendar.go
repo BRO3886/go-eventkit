@@ -4,7 +4,25 @@
 // calendar events, backed by Apple's EventKit framework for in-process,
 // sub-200ms access. No AppleScript, no subprocesses.
 //
-// Usage:
+// EventKit sees all configured accounts — iCloud, Google (CalDAV), Exchange,
+// local, and subscribed calendars. Attendees and organizer fields are read-only
+// (Apple limitation).
+//
+// # Platform Support
+//
+// This package requires macOS (darwin). On other platforms, [New] returns
+// [ErrUnsupported]. Types and constants are importable on all platforms for
+// use in cross-platform code.
+//
+// # Permissions
+//
+// On first call to [New], macOS displays a TCC (Transparency, Consent, and
+// Control) prompt requesting calendar access. The prompt shows the terminal
+// application name, not the Go binary. If denied, [New] returns
+// [ErrAccessDenied]. Permissions can be managed in System Settings >
+// Privacy & Security > Calendars.
+//
+// # Usage
 //
 //	client, err := calendar.New()
 //	if err != nil {
@@ -32,76 +50,120 @@ import (
 	"time"
 )
 
-// Sentinel errors.
+// Sentinel errors returned by Client methods. Use [errors.Is] to check:
+//
+//	if errors.Is(err, calendar.ErrNotFound) { ... }
 var (
-	// ErrUnsupported is returned on non-darwin platforms.
+	// ErrUnsupported is returned by [New] on non-darwin platforms.
 	ErrUnsupported = errors.New("calendar: only supported on macOS (darwin)")
 
-	// ErrAccessDenied is returned when the user denies calendar access (TCC).
+	// ErrAccessDenied is returned by [New] when the user denies calendar
+	// access via the macOS TCC prompt.
 	ErrAccessDenied = errors.New("calendar: access denied")
 
-	// ErrNotFound is returned when an event or calendar is not found.
+	// ErrNotFound is returned by [Client.Event], [Client.UpdateEvent], and
+	// [Client.DeleteEvent] when no event matches the given ID.
 	ErrNotFound = errors.New("calendar: not found")
 )
 
 // Client provides access to macOS Calendar via EventKit.
+//
+// Create a Client with [New]. All methods are safe to call from a single
+// goroutine. For concurrent usage from multiple goroutines, see the
+// concurrency notes in the package documentation.
 type Client struct{}
 
-// Calendar represents a calendar (e.g., "Work", "Personal", "Holidays").
+// Calendar represents a calendar container (e.g., "Work", "Personal", "Holidays").
+// Calendars belong to a source (iCloud, Google, Exchange, etc.) and contain events.
 type Calendar struct {
-	ID       string       `json:"id"`
-	Title    string       `json:"title"`
-	Type     CalendarType `json:"type"`
-	Color    string       `json:"color"`
-	Source   string       `json:"source"`
-	ReadOnly bool        `json:"readOnly"`
+	// ID is the stable calendar identifier (EKCalendar.calendarIdentifier).
+	ID string `json:"id"`
+	// Title is the display name of the calendar.
+	Title string `json:"title"`
+	// Type indicates the calendar backend (local, CalDAV, Exchange, etc.).
+	Type CalendarType `json:"type"`
+	// Color is the calendar's display color as a hex string (e.g., "#FF6961").
+	Color string `json:"color"`
+	// Source is the account name this calendar belongs to (e.g., "iCloud", "Gmail").
+	Source string `json:"source"`
+	// ReadOnly is true for calendars that cannot be modified (subscriptions, birthdays).
+	ReadOnly bool `json:"readOnly"`
 }
 
-// Event represents a calendar event.
+// Event represents a calendar event (EKEvent).
 type Event struct {
-	ID           string       `json:"id"`
-	Title        string       `json:"title"`
-	StartDate    time.Time    `json:"startDate"`
-	EndDate      time.Time    `json:"endDate"`
-	AllDay       bool         `json:"allDay"`
-	Location     string       `json:"location"`
-	Notes        string       `json:"notes"`
-	URL          string       `json:"url"`
-	Calendar     string       `json:"calendar"`
-	CalendarID   string       `json:"calendarID"`
-	Status       EventStatus  `json:"status"`
+	// ID is the stable event identifier (EKEvent.eventIdentifier).
+	// This ID is stable across recurrence edits, unlike calendarItemIdentifier.
+	ID string `json:"id"`
+	// Title is the event's display title.
+	Title string `json:"title"`
+	// StartDate is when the event begins.
+	StartDate time.Time `json:"startDate"`
+	// EndDate is when the event ends.
+	EndDate time.Time `json:"endDate"`
+	// AllDay is true for events that span entire days without specific times.
+	AllDay bool `json:"allDay"`
+	// Location is the event's location string. May be empty.
+	Location string `json:"location"`
+	// Notes is the event's plain-text notes. EventKit does not support rich text.
+	Notes string `json:"notes"`
+	// URL is an optional URL associated with the event (e.g., a meeting link).
+	URL string `json:"url"`
+	// Calendar is the display name of the calendar this event belongs to.
+	Calendar string `json:"calendar"`
+	// CalendarID is the identifier of the calendar this event belongs to.
+	CalendarID string `json:"calendarID"`
+	// Status is the event's confirmation status (none, confirmed, tentative, canceled).
+	Status EventStatus `json:"status"`
+	// Availability indicates the user's availability during this event.
 	Availability Availability `json:"availability"`
-	Organizer    string       `json:"organizer"`
-	Attendees    []Attendee   `json:"attendees"`
-	Recurring    bool         `json:"recurring"`
-	Alerts       []Alert      `json:"alerts"`
-	CreatedAt    time.Time    `json:"createdAt"`
-	ModifiedAt   time.Time    `json:"modifiedAt"`
-	TimeZone     string       `json:"timeZone"`
+	// Organizer is the display name of the event organizer. Read-only from EventKit.
+	Organizer string `json:"organizer"`
+	// Attendees lists the event participants. Read-only — EventKit cannot
+	// add or modify attendees (Apple limitation since 2013).
+	Attendees []Attendee `json:"attendees"`
+	// Recurring is true if this event is part of a recurrence series.
+	Recurring bool `json:"recurring"`
+	// Alerts lists the notification alerts configured for this event.
+	Alerts []Alert `json:"alerts"`
+	// CreatedAt is when the event was first created.
+	CreatedAt time.Time `json:"createdAt"`
+	// ModifiedAt is when the event was last modified.
+	ModifiedAt time.Time `json:"modifiedAt"`
+	// TimeZone is the IANA timezone identifier for this event (e.g., "America/New_York").
+	TimeZone string `json:"timeZone"`
 }
 
-// Attendee represents a participant in an event (read-only from EventKit).
+// Attendee represents a participant in an event.
+//
+// Attendees are read-only from EventKit — Apple does not provide an API to
+// add, remove, or modify event participants.
 type Attendee struct {
-	Name   string            `json:"name"`
-	Email  string            `json:"email"`
+	// Name is the attendee's display name.
+	Name string `json:"name"`
+	// Email is the attendee's email address.
+	Email string `json:"email"`
+	// Status is the attendee's response status (pending, accepted, declined, etc.).
 	Status ParticipantStatus `json:"status"`
 }
 
-// Alert represents a reminder alert before an event.
+// Alert represents a notification alert before an event.
 type Alert struct {
 	// RelativeOffset is the time before the event to fire the alert.
-	// Negative values mean before the event (e.g., -15*time.Minute).
+	// Negative values mean before the event (e.g., -15*time.Minute for 15 minutes before).
+	// Positive values mean after the event start.
 	RelativeOffset time.Duration `json:"relativeOffset"`
 }
 
 // EventStatus indicates the confirmation status of an event.
+// Values correspond to Apple's EKEventStatus enum.
 type EventStatus int
 
 const (
-	StatusNone      EventStatus = 0
-	StatusConfirmed EventStatus = 1
-	StatusTentative EventStatus = 2
-	StatusCanceled  EventStatus = 3
+	StatusNone      EventStatus = 0 // No status set.
+	StatusConfirmed EventStatus = 1 // Event is confirmed.
+	StatusTentative EventStatus = 2 // Event is tentatively accepted.
+	StatusCanceled  EventStatus = 3 // Event has been canceled.
 )
 
 // String returns a human-readable representation of the event status.
@@ -120,15 +182,16 @@ func (s EventStatus) String() string {
 	}
 }
 
-// Availability indicates the user's availability during an event.
+// Availability indicates the user's free/busy status during an event.
+// Values correspond to Apple's EKEventAvailability enum.
 type Availability int
 
 const (
-	AvailabilityNotSupported Availability = -1
-	AvailabilityBusy         Availability = 0
-	AvailabilityFree         Availability = 1
-	AvailabilityTentative    Availability = 2
-	AvailabilityUnavailable  Availability = 3
+	AvailabilityNotSupported Availability = -1 // Availability not supported by the calendar source.
+	AvailabilityBusy         Availability = 0  // User is busy during this event.
+	AvailabilityFree         Availability = 1  // User is free during this event.
+	AvailabilityTentative    Availability = 2  // User is tentatively busy.
+	AvailabilityUnavailable  Availability = 3  // User is unavailable.
 )
 
 // String returns a human-readable representation of the availability.
@@ -149,15 +212,16 @@ func (a Availability) String() string {
 	}
 }
 
-// CalendarType indicates the type of a calendar.
+// CalendarType indicates the backend type of a calendar.
+// Values correspond to Apple's EKCalendarType enum.
 type CalendarType int
 
 const (
-	CalendarTypeLocal        CalendarType = 0
-	CalendarTypeCalDAV       CalendarType = 1
-	CalendarTypeExchange     CalendarType = 2
-	CalendarTypeSubscription CalendarType = 3
-	CalendarTypeBirthday     CalendarType = 4
+	CalendarTypeLocal        CalendarType = 0 // Locally stored calendar.
+	CalendarTypeCalDAV       CalendarType = 1 // CalDAV calendar (iCloud, Google, etc.).
+	CalendarTypeExchange     CalendarType = 2 // Microsoft Exchange calendar.
+	CalendarTypeSubscription CalendarType = 3 // Subscribed .ics calendar (read-only).
+	CalendarTypeBirthday     CalendarType = 4 // Birthday calendar from Contacts (read-only).
 )
 
 // String returns a human-readable representation of the calendar type.
@@ -178,15 +242,16 @@ func (t CalendarType) String() string {
 	}
 }
 
-// ParticipantStatus indicates an attendee's response status.
+// ParticipantStatus indicates an attendee's RSVP response status.
+// Values correspond to Apple's EKParticipantStatus enum.
 type ParticipantStatus int
 
 const (
-	ParticipantStatusUnknown   ParticipantStatus = 0
-	ParticipantStatusPending   ParticipantStatus = 1
-	ParticipantStatusAccepted  ParticipantStatus = 2
-	ParticipantStatusDeclined  ParticipantStatus = 3
-	ParticipantStatusTentative ParticipantStatus = 4
+	ParticipantStatusUnknown   ParticipantStatus = 0 // Response status is unknown.
+	ParticipantStatusPending   ParticipantStatus = 1 // Attendee has not yet responded.
+	ParticipantStatusAccepted  ParticipantStatus = 2 // Attendee accepted the invitation.
+	ParticipantStatusDeclined  ParticipantStatus = 3 // Attendee declined the invitation.
+	ParticipantStatusTentative ParticipantStatus = 4 // Attendee tentatively accepted.
 )
 
 // String returns a human-readable representation of the participant status.
@@ -207,13 +272,16 @@ func (s ParticipantStatus) String() string {
 	}
 }
 
-// Span controls whether an operation affects a single occurrence or future occurrences of a recurring event.
+// Span controls whether a write operation (update, delete) affects a single
+// occurrence or all future occurrences of a recurring event.
+// For non-recurring events, the span value has no effect.
+// Values correspond to Apple's EKSpan enum.
 type Span int
 
 const (
 	// SpanThisEvent affects only this occurrence of a recurring event.
 	SpanThisEvent Span = 0
-	// SpanFutureEvents affects this and all future occurrences.
+	// SpanFutureEvents affects this and all future occurrences of a recurring event.
 	SpanFutureEvents Span = 1
 )
 
@@ -229,7 +297,8 @@ func (s Span) String() string {
 	}
 }
 
-// ListOption configures event listing behavior.
+// ListOption configures filtering for [Client.Events].
+// Multiple options can be combined; all filters are applied together (AND logic).
 type ListOption func(*listOptions)
 
 type listOptions struct {
@@ -259,33 +328,54 @@ func WithSearch(query string) ListOption {
 	}
 }
 
-// CreateEventInput contains the fields needed to create a new event.
+// CreateEventInput contains the fields for creating a new event via
+// [Client.CreateEvent].
+//
+// Title, StartDate, and EndDate are required. All other fields are optional.
 type CreateEventInput struct {
-	Title     string    `json:"title"`
+	// Title is the event title (required).
+	Title string `json:"title"`
+	// StartDate is when the event begins (required).
 	StartDate time.Time `json:"startDate"`
-	EndDate   time.Time `json:"endDate"`
-	AllDay    bool      `json:"allDay"`
-	Location  string    `json:"location"`
-	Notes     string    `json:"notes"`
-	URL       string    `json:"url"`
-	Calendar  string    `json:"calendar"`
-	Alerts    []Alert   `json:"alerts"`
-	TimeZone  string    `json:"timeZone"`
+	// EndDate is when the event ends (required).
+	EndDate time.Time `json:"endDate"`
+	// AllDay marks the event as an all-day event. When true, only the date
+	// portion of StartDate and EndDate is used.
+	AllDay bool `json:"allDay"`
+	// Location is the event's location string.
+	Location string `json:"location"`
+	// Notes is plain-text notes for the event.
+	Notes string `json:"notes"`
+	// URL is an optional URL to associate with the event.
+	URL string `json:"url"`
+	// Calendar is the name of the calendar to create the event in.
+	// If empty, the system default calendar is used.
+	Calendar string `json:"calendar"`
+	// Alerts configures notification alerts before the event.
+	Alerts []Alert `json:"alerts"`
+	// TimeZone is the IANA timezone for the event (e.g., "Asia/Tokyo").
+	// If empty, the system timezone is used.
+	TimeZone string `json:"timeZone"`
 }
 
-// UpdateEventInput contains the fields that can be updated on an event.
-// Nil pointer fields are not changed.
+// UpdateEventInput contains fields for updating an existing event via
+// [Client.UpdateEvent].
+//
+// Only non-nil pointer fields are modified. Nil fields are left unchanged.
+// To clear a string field, set it to a pointer to an empty string.
 type UpdateEventInput struct {
-	Title    *string    `json:"title,omitempty"`
+	Title     *string    `json:"title,omitempty"`
 	StartDate *time.Time `json:"startDate,omitempty"`
 	EndDate   *time.Time `json:"endDate,omitempty"`
 	AllDay    *bool      `json:"allDay,omitempty"`
 	Location  *string    `json:"location,omitempty"`
 	Notes     *string    `json:"notes,omitempty"`
 	URL       *string    `json:"url,omitempty"`
-	Calendar  *string    `json:"calendar,omitempty"`
-	Alerts    *[]Alert   `json:"alerts,omitempty"`
-	TimeZone  *string    `json:"timeZone,omitempty"`
+	// Calendar moves the event to a different calendar by name.
+	Calendar *string `json:"calendar,omitempty"`
+	// Alerts replaces all existing alerts. Pass an empty slice to remove all alerts.
+	Alerts   *[]Alert `json:"alerts,omitempty"`
+	TimeZone *string  `json:"timeZone,omitempty"`
 }
 
 // applyOptions applies ListOption functions and returns the resulting options.
