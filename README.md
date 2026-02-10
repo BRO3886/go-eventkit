@@ -13,7 +13,7 @@ Go bindings for Apple's EventKit framework. In-process, sub-200ms access to macO
 ## Requirements
 
 - macOS (darwin) — uses Apple's EventKit framework via cgo
-- Go 1.21+
+- Go 1.24+
 - Xcode Command Line Tools (`xcode-select --install`)
 
 Types are importable on all platforms for development. Bridge operations return `ErrUnsupported` on non-darwin.
@@ -179,6 +179,7 @@ Manage permissions in **System Settings > Privacy & Security > Calendars / Remin
 ```
 calendar/                   # Calendar event bindings
 ├── calendar.go             # Go types (no build constraint — importable everywhere)
+├── parse.go                # JSON parsing/marshaling (platform-agnostic)
 ├── bridge_darwin.go        # cgo wrappers (darwin only)
 ├── bridge_darwin.m         # ObjC EventKit bridge
 ├── bridge_darwin.h         # C header
@@ -186,7 +187,7 @@ calendar/                   # Calendar event bindings
 
 reminders/                  # Reminder bindings
 ├── reminders.go            # Go types (no build constraint)
-├── parse.go                # JSON parsing layer
+├── parse.go                # JSON parsing/marshaling (platform-agnostic)
 ├── bridge_darwin.go        # cgo wrappers (darwin only)
 ├── bridge_darwin.m         # ObjC EventKit bridge
 ├── bridge_darwin.h         # C header
