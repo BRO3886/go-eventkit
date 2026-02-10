@@ -124,6 +124,18 @@ type Event struct {
 	Attendees []Attendee `json:"attendees"`
 	// Recurring is true if this event is part of a recurrence series.
 	Recurring bool `json:"recurring"`
+	// RecurrenceRules contains the recurrence patterns for this event.
+	// Empty if the event is not recurring.
+	RecurrenceRules []RecurrenceRule `json:"recurrenceRules,omitempty"`
+	// IsDetached is true when this occurrence of a recurring event was
+	// modified independently from the series.
+	IsDetached bool `json:"isDetached"`
+	// OccurrenceDate is the original date for this occurrence of a recurring
+	// event, even if the occurrence has been moved to a different date.
+	OccurrenceDate *time.Time `json:"occurrenceDate,omitempty"`
+	// StructuredLocation contains geographic coordinates and geofence data.
+	// Nil if no structured location is set. The Title field may differ from Location.
+	StructuredLocation *StructuredLocation `json:"structuredLocation,omitempty"`
 	// Alerts lists the notification alerts configured for this event.
 	Alerts []Alert `json:"alerts"`
 	// CreatedAt is when the event was first created.
@@ -153,6 +165,171 @@ type Alert struct {
 	// Negative values mean before the event (e.g., -15*time.Minute for 15 minutes before).
 	// Positive values mean after the event start.
 	RelativeOffset time.Duration `json:"relativeOffset"`
+}
+
+// RecurrenceRule defines how an event repeats.
+// Corresponds to EKRecurrenceRule (subset of iCalendar RRULE).
+type RecurrenceRule struct {
+	// Frequency is how often the event repeats (daily, weekly, monthly, yearly).
+	Frequency RecurrenceFrequency `json:"frequency"`
+	// Interval is the number of frequency units between occurrences.
+	// E.g., Frequency=Weekly + Interval=2 means every 2 weeks.
+	Interval int `json:"interval"`
+	// DaysOfTheWeek specifies which days of the week the event occurs on.
+	// Only relevant for weekly or monthly frequency. Nil means not constrained.
+	DaysOfTheWeek []RecurrenceDayOfWeek `json:"daysOfTheWeek,omitempty"`
+	// DaysOfTheMonth specifies which days of the month (1-31, or -1 to -31
+	// for counting from end). Only relevant for monthly frequency.
+	DaysOfTheMonth []int `json:"daysOfTheMonth,omitempty"`
+	// MonthsOfTheYear specifies which months (1-12). Only relevant for yearly frequency.
+	MonthsOfTheYear []int `json:"monthsOfTheYear,omitempty"`
+	// WeeksOfTheYear specifies which weeks (1-53, or -1 to -53).
+	// Only relevant for yearly frequency.
+	WeeksOfTheYear []int `json:"weeksOfTheYear,omitempty"`
+	// DaysOfTheYear specifies which days of the year (1-366, or -1 to -366).
+	// Only relevant for yearly frequency.
+	DaysOfTheYear []int `json:"daysOfTheYear,omitempty"`
+	// SetPositions filters the set of occurrences within a period.
+	// E.g., [-1] with DaysOfTheWeek=[Mon-Fri] means "last weekday of the month".
+	SetPositions []int `json:"setPositions,omitempty"`
+	// End defines when the recurrence stops. Nil means it recurs forever.
+	End *RecurrenceEnd `json:"end,omitempty"`
+}
+
+// Until sets the recurrence to end on a specific date.
+func (r RecurrenceRule) Until(t time.Time) RecurrenceRule {
+	r.End = &RecurrenceEnd{EndDate: &t}
+	return r
+}
+
+// Count sets the recurrence to end after n occurrences.
+func (r RecurrenceRule) Count(n int) RecurrenceRule {
+	r.End = &RecurrenceEnd{OccurrenceCount: n}
+	return r
+}
+
+// RecurrenceFrequency defines how often an event repeats.
+// Values correspond to Apple's EKRecurrenceFrequency enum.
+type RecurrenceFrequency int
+
+const (
+	FrequencyDaily   RecurrenceFrequency = 0 // Event repeats daily.
+	FrequencyWeekly  RecurrenceFrequency = 1 // Event repeats weekly.
+	FrequencyMonthly RecurrenceFrequency = 2 // Event repeats monthly.
+	FrequencyYearly  RecurrenceFrequency = 3 // Event repeats yearly.
+)
+
+// String returns a human-readable representation of the recurrence frequency.
+func (f RecurrenceFrequency) String() string {
+	switch f {
+	case FrequencyDaily:
+		return "daily"
+	case FrequencyWeekly:
+		return "weekly"
+	case FrequencyMonthly:
+		return "monthly"
+	case FrequencyYearly:
+		return "yearly"
+	default:
+		return "unknown"
+	}
+}
+
+// RecurrenceDayOfWeek specifies a day of the week, optionally within a
+// specific week of the month/year.
+type RecurrenceDayOfWeek struct {
+	// DayOfTheWeek is the day (Sunday=1 through Saturday=7).
+	DayOfTheWeek Weekday `json:"dayOfTheWeek"`
+	// WeekNumber is 0 for every week, 1-53 for a specific week,
+	// or negative (-1 to -53) for counting from the end.
+	// E.g., WeekNumber=2 + DayOfTheWeek=Tuesday means "second Tuesday".
+	WeekNumber int `json:"weekNumber"`
+}
+
+// Weekday represents a day of the week (EKWeekday).
+// Values correspond to Apple's EKWeekday enum.
+type Weekday int
+
+const (
+	Sunday    Weekday = 1 // Sunday.
+	Monday    Weekday = 2 // Monday.
+	Tuesday   Weekday = 3 // Tuesday.
+	Wednesday Weekday = 4 // Wednesday.
+	Thursday  Weekday = 5 // Thursday.
+	Friday    Weekday = 6 // Friday.
+	Saturday  Weekday = 7 // Saturday.
+)
+
+// String returns a human-readable representation of the weekday.
+func (w Weekday) String() string {
+	switch w {
+	case Sunday:
+		return "sunday"
+	case Monday:
+		return "monday"
+	case Tuesday:
+		return "tuesday"
+	case Wednesday:
+		return "wednesday"
+	case Thursday:
+		return "thursday"
+	case Friday:
+		return "friday"
+	case Saturday:
+		return "saturday"
+	default:
+		return "unknown"
+	}
+}
+
+// RecurrenceEnd defines when a recurrence stops.
+// Exactly one of EndDate or OccurrenceCount should be set.
+type RecurrenceEnd struct {
+	// EndDate stops recurrence after this date. Nil if count-based.
+	EndDate *time.Time `json:"endDate,omitempty"`
+	// OccurrenceCount stops after this many occurrences. 0 if date-based.
+	OccurrenceCount int `json:"occurrenceCount,omitempty"`
+}
+
+// StructuredLocation represents a geographic location with optional
+// coordinates and geofence radius. Corresponds to EKStructuredLocation.
+type StructuredLocation struct {
+	// Title is the display name of the location (e.g., "Apple Park").
+	Title string `json:"title"`
+	// Latitude is the geographic latitude. Zero if no coordinates are set.
+	Latitude float64 `json:"latitude,omitempty"`
+	// Longitude is the geographic longitude. Zero if no coordinates are set.
+	Longitude float64 `json:"longitude,omitempty"`
+	// Radius is the geofence radius in meters. Zero means system default.
+	Radius float64 `json:"radius,omitempty"`
+}
+
+// Daily returns a [RecurrenceRule] that repeats every interval days.
+func Daily(interval int) RecurrenceRule {
+	return RecurrenceRule{Frequency: FrequencyDaily, Interval: interval}
+}
+
+// Weekly returns a [RecurrenceRule] that repeats every interval weeks on the specified days.
+// If no days are specified, repeats on the same day of the week as the event.
+func Weekly(interval int, days ...Weekday) RecurrenceRule {
+	r := RecurrenceRule{Frequency: FrequencyWeekly, Interval: interval}
+	for _, d := range days {
+		r.DaysOfTheWeek = append(r.DaysOfTheWeek, RecurrenceDayOfWeek{DayOfTheWeek: d})
+	}
+	return r
+}
+
+// Monthly returns a [RecurrenceRule] that repeats every interval months on the specified
+// days of the month.
+func Monthly(interval int, daysOfMonth ...int) RecurrenceRule {
+	r := RecurrenceRule{Frequency: FrequencyMonthly, Interval: interval}
+	r.DaysOfTheMonth = append(r.DaysOfTheMonth, daysOfMonth...)
+	return r
+}
+
+// Yearly returns a [RecurrenceRule] that repeats every interval years.
+func Yearly(interval int) RecurrenceRule {
+	return RecurrenceRule{Frequency: FrequencyYearly, Interval: interval}
 }
 
 // EventStatus indicates the confirmation status of an event.
@@ -356,6 +533,14 @@ type CreateEventInput struct {
 	// TimeZone is the IANA timezone for the event (e.g., "Asia/Tokyo").
 	// If empty, the system timezone is used.
 	TimeZone string `json:"timeZone"`
+	// RecurrenceRules sets the recurrence pattern(s) for the event.
+	// Most events have zero or one rule. Multiple rules are supported by
+	// EventKit but uncommon.
+	RecurrenceRules []RecurrenceRule `json:"recurrenceRules,omitempty"`
+	// StructuredLocation sets geographic coordinates for the event.
+	// If set, this takes precedence over Location for map integrations.
+	// The plain Location string is set independently.
+	StructuredLocation *StructuredLocation `json:"structuredLocation,omitempty"`
 }
 
 // UpdateEventInput contains fields for updating an existing event via
@@ -376,6 +561,13 @@ type UpdateEventInput struct {
 	// Alerts replaces all existing alerts. Pass an empty slice to remove all alerts.
 	Alerts   *[]Alert `json:"alerts,omitempty"`
 	TimeZone *string  `json:"timeZone,omitempty"`
+	// RecurrenceRules replaces all existing recurrence rules.
+	// Pass an empty slice to make the event non-recurring.
+	// Pass nil to leave recurrence unchanged.
+	RecurrenceRules *[]RecurrenceRule `json:"recurrenceRules,omitempty"`
+	// StructuredLocation updates the geographic location. Set to non-nil to
+	// update, leave nil to keep unchanged.
+	StructuredLocation *StructuredLocation `json:"structuredLocation,omitempty"`
 }
 
 // applyOptions applies ListOption functions and returns the resulting options.
