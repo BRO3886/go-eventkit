@@ -39,6 +39,17 @@ func (c *Client) DeleteReminder(id string) error {
 	return ErrUnsupported
 }
 
+// CreateList creates a new reminder list and returns it with its assigned ID.
+func (c *Client) CreateList(input CreateListInput) (*List, error) { return nil, ErrUnsupported }
+
+// UpdateList updates an existing reminder list and returns the updated version.
+func (c *Client) UpdateList(id string, input UpdateListInput) (*List, error) {
+	return nil, ErrUnsupported
+}
+
+// DeleteList permanently removes a reminder list and all its reminders.
+func (c *Client) DeleteList(id string) error { return ErrUnsupported }
+
 // CompleteReminder marks a reminder as completed and returns the updated version.
 func (c *Client) CompleteReminder(id string) (*Reminder, error) {
 	return nil, ErrUnsupported

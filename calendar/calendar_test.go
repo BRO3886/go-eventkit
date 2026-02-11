@@ -1913,6 +1913,129 @@ func TestMarshalUpdateInputWithStructuredLocation(t *testing.T) {
 	})
 }
 
+// --- Calendar CRUD marshal tests ---
+
+func TestMarshalCreateCalendarInput(t *testing.T) {
+	t.Run("full input", func(t *testing.T) {
+		input := CreateCalendarInput{
+			Title:  "My Calendar",
+			Source: "iCloud",
+			Color:  "#FF6961",
+		}
+		data, err := marshalCreateCalendarInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var result map[string]any
+		if err := json.Unmarshal(data, &result); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+		if result["title"] != "My Calendar" {
+			t.Errorf("title = %v, want %q", result["title"], "My Calendar")
+		}
+		if result["source"] != "iCloud" {
+			t.Errorf("source = %v, want %q", result["source"], "iCloud")
+		}
+		if result["color"] != "#FF6961" {
+			t.Errorf("color = %v, want %q", result["color"], "#FF6961")
+		}
+	})
+
+	t.Run("minimal input omits optional fields", func(t *testing.T) {
+		input := CreateCalendarInput{Title: "Work"}
+		data, err := marshalCreateCalendarInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var result map[string]any
+		json.Unmarshal(data, &result)
+
+		if result["title"] != "Work" {
+			t.Errorf("title = %v", result["title"])
+		}
+		if _, ok := result["source"]; ok {
+			t.Error("source should be omitted when empty")
+		}
+		if _, ok := result["color"]; ok {
+			t.Error("color should be omitted when empty")
+		}
+	})
+}
+
+func TestMarshalUpdateCalendarInput(t *testing.T) {
+	t.Run("update title only", func(t *testing.T) {
+		title := "New Name"
+		input := UpdateCalendarInput{Title: &title}
+		data, err := marshalUpdateCalendarInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var result map[string]any
+		json.Unmarshal(data, &result)
+
+		if result["title"] != "New Name" {
+			t.Errorf("title = %v", result["title"])
+		}
+		if _, ok := result["color"]; ok {
+			t.Error("color should not be present when nil")
+		}
+	})
+
+	t.Run("update color only", func(t *testing.T) {
+		color := "#00FF00"
+		input := UpdateCalendarInput{Color: &color}
+		data, err := marshalUpdateCalendarInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var result map[string]any
+		json.Unmarshal(data, &result)
+
+		if result["color"] != "#00FF00" {
+			t.Errorf("color = %v", result["color"])
+		}
+		if _, ok := result["title"]; ok {
+			t.Error("title should not be present when nil")
+		}
+	})
+
+	t.Run("update both", func(t *testing.T) {
+		title := "Renamed"
+		color := "#AABBCC"
+		input := UpdateCalendarInput{Title: &title, Color: &color}
+		data, err := marshalUpdateCalendarInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var result map[string]any
+		json.Unmarshal(data, &result)
+
+		if result["title"] != "Renamed" {
+			t.Errorf("title = %v", result["title"])
+		}
+		if result["color"] != "#AABBCC" {
+			t.Errorf("color = %v", result["color"])
+		}
+	})
+
+	t.Run("empty update produces empty object", func(t *testing.T) {
+		input := UpdateCalendarInput{}
+		data, err := marshalUpdateCalendarInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if string(data) != "{}" {
+			t.Errorf("got %s, want {}", string(data))
+		}
+	})
+}
+
+func TestSentinelErrorImmutable(t *testing.T) {
+	if ErrImmutable.Error() != "calendar: calendar is immutable" {
+		t.Errorf("ErrImmutable = %q", ErrImmutable.Error())
+	}
+}
+
 // --- Large event set parsing ---
 
 func TestLargeEventSet(t *testing.T) {

@@ -220,6 +220,42 @@ func parseListsJSON(jsonStr string) ([]List, error) {
 	return result, nil
 }
 
+// --- JSON marshaling for list writes ---
+
+type createListJSON struct {
+	Title  string `json:"title"`
+	Source string `json:"source,omitempty"`
+	Color  string `json:"color,omitempty"`
+}
+
+func marshalCreateListInput(input CreateListInput) (string, error) {
+	j := createListJSON{
+		Title:  input.Title,
+		Source: input.Source,
+		Color:  input.Color,
+	}
+	data, err := json.Marshal(j)
+	if err != nil {
+		return "", fmt.Errorf("reminders: failed to marshal create list input: %w", err)
+	}
+	return string(data), nil
+}
+
+func marshalUpdateListInput(input UpdateListInput) (string, error) {
+	m := make(map[string]any)
+	if input.Title != nil {
+		m["title"] = *input.Title
+	}
+	if input.Color != nil {
+		m["color"] = *input.Color
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		return "", fmt.Errorf("reminders: failed to marshal update list input: %w", err)
+	}
+	return string(data), nil
+}
+
 // marshalCreateInput converts CreateReminderInput to JSON for the bridge.
 func marshalCreateInput(input CreateReminderInput) (string, error) {
 	m := map[string]any{

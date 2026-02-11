@@ -11,6 +11,7 @@ package reminders
 import "C"
 import (
 	"fmt"
+	"strings"
 	"unsafe"
 )
 
@@ -155,6 +156,100 @@ func (c *Client) DeleteReminder(id string) error {
 	}
 	defer C.ek_rem_free(cstr)
 	return nil
+}
+
+// CreateList creates a new reminder list and returns it with its assigned ID.
+// The list is saved to the EventKit store immediately.
+func (c *Client) CreateList(input CreateListInput) (*List, error) {
+	jsonStr, err := marshalCreateListInput(input)
+	if err != nil {
+		return nil, err
+	}
+
+	cJSON := C.CString(jsonStr)
+	defer C.free(unsafe.Pointer(cJSON))
+
+	cstr := C.ek_rem_create_list(cJSON)
+	if cstr == nil {
+		return nil, fmt.Errorf("reminders: %s", getLastError())
+	}
+	defer C.ek_rem_free(cstr)
+
+	jsonResp := C.GoString(cstr)
+	lists, err := parseListsJSON("[" + jsonResp + "]")
+	if err != nil {
+		return nil, err
+	}
+	if len(lists) == 0 {
+		return nil, fmt.Errorf("reminders: unexpected empty response")
+	}
+	return &lists[0], nil
+}
+
+// UpdateList updates an existing reminder list and returns the updated version.
+// Only non-nil fields in the input are modified.
+// Returns [ErrNotFound] if the list does not exist.
+// Returns [ErrImmutable] if the list is immutable.
+func (c *Client) UpdateList(id string, input UpdateListInput) (*List, error) {
+	jsonStr, err := marshalUpdateListInput(input)
+	if err != nil {
+		return nil, err
+	}
+
+	cID := C.CString(id)
+	defer C.free(unsafe.Pointer(cID))
+	cJSON := C.CString(jsonStr)
+	defer C.free(unsafe.Pointer(cJSON))
+
+	cstr := C.ek_rem_update_list(cID, cJSON)
+	if cstr == nil {
+		errMsg := getLastError()
+		if contains(errMsg, "not found") {
+			return nil, ErrNotFound
+		}
+		if contains(errMsg, "immutable") {
+			return nil, ErrImmutable
+		}
+		return nil, fmt.Errorf("reminders: %s", errMsg)
+	}
+	defer C.ek_rem_free(cstr)
+
+	jsonResp := C.GoString(cstr)
+	lists, err := parseListsJSON("[" + jsonResp + "]")
+	if err != nil {
+		return nil, err
+	}
+	if len(lists) == 0 {
+		return nil, fmt.Errorf("reminders: unexpected empty response")
+	}
+	return &lists[0], nil
+}
+
+// DeleteList permanently removes a reminder list and all its reminders.
+// Returns [ErrNotFound] if the list does not exist.
+// Returns [ErrImmutable] if the list is immutable.
+func (c *Client) DeleteList(id string) error {
+	cID := C.CString(id)
+	defer C.free(unsafe.Pointer(cID))
+
+	cstr := C.ek_rem_delete_list(cID)
+	if cstr == nil {
+		errMsg := getLastError()
+		if contains(errMsg, "not found") {
+			return ErrNotFound
+		}
+		if contains(errMsg, "immutable") {
+			return ErrImmutable
+		}
+		return fmt.Errorf("reminders: %s", errMsg)
+	}
+	defer C.ek_rem_free(cstr)
+	return nil
+}
+
+// contains checks if s contains substr (case-insensitive).
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
 
 // CompleteReminder marks a reminder as completed and returns the updated version.

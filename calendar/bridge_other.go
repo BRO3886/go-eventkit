@@ -32,3 +32,16 @@ func (c *Client) UpdateEvent(id string, input UpdateEventInput, span Span) (*Eve
 
 // DeleteEvent permanently removes an event.
 func (c *Client) DeleteEvent(id string, span Span) error { return ErrUnsupported }
+
+// CreateCalendar creates a new calendar and returns it with its assigned ID.
+func (c *Client) CreateCalendar(input CreateCalendarInput) (*Calendar, error) {
+	return nil, ErrUnsupported
+}
+
+// UpdateCalendar updates an existing calendar and returns the updated version.
+func (c *Client) UpdateCalendar(id string, input UpdateCalendarInput) (*Calendar, error) {
+	return nil, ErrUnsupported
+}
+
+// DeleteCalendar permanently removes a calendar and all its events.
+func (c *Client) DeleteCalendar(id string) error { return ErrUnsupported }

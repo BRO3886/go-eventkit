@@ -1047,6 +1047,114 @@ func TestMockRecurrenceEdgeCases(t *testing.T) {
 
 // --- Comprehensive marshal/parse symmetry test ---
 
+// --- Calendar CRUD mock tests ---
+
+func TestMockCreateCalendarRoundtrip(t *testing.T) {
+	// Simulate: Go marshals CreateCalendarInput -> ObjC creates calendar -> returns JSON -> Go parses
+	input := CreateCalendarInput{
+		Title:  "Test Calendar",
+		Source: "iCloud",
+		Color:  "#FF6961",
+	}
+
+	data, err := marshalCreateCalendarInput(input)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	// Verify the JSON we'd send to ObjC
+	var m map[string]any
+	json.Unmarshal(data, &m)
+	if m["title"] != "Test Calendar" {
+		t.Errorf("title = %v", m["title"])
+	}
+	if m["source"] != "iCloud" {
+		t.Errorf("source = %v", m["source"])
+	}
+	if m["color"] != "#FF6961" {
+		t.Errorf("color = %v", m["color"])
+	}
+
+	// Simulate ObjC response: a single calendar JSON wrapped in array for parsing
+	responseJSON := simulateCalendarsResponse([]Calendar{
+		{ID: "new-cal-123", Title: "Test Calendar", Type: CalendarTypeCalDAV, Color: "#FF6961", Source: "iCloud", ReadOnly: false},
+	})
+
+	cals, err := parseCalendarsJSON(responseJSON)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+	if len(cals) != 1 {
+		t.Fatalf("expected 1 calendar, got %d", len(cals))
+	}
+	if cals[0].ID != "new-cal-123" {
+		t.Errorf("ID = %q", cals[0].ID)
+	}
+	if cals[0].Title != "Test Calendar" {
+		t.Errorf("Title = %q", cals[0].Title)
+	}
+	if cals[0].Color != "#FF6961" {
+		t.Errorf("Color = %q", cals[0].Color)
+	}
+}
+
+func TestMockUpdateCalendarRoundtrip(t *testing.T) {
+	t.Run("rename calendar", func(t *testing.T) {
+		title := "Renamed Calendar"
+		data, err := marshalUpdateCalendarInput(UpdateCalendarInput{Title: &title})
+		if err != nil {
+			t.Fatalf("marshal error: %v", err)
+		}
+
+		var m map[string]any
+		json.Unmarshal(data, &m)
+		if m["title"] != "Renamed Calendar" {
+			t.Errorf("title = %v", m["title"])
+		}
+		if _, ok := m["color"]; ok {
+			t.Error("color should not be in update when nil")
+		}
+
+		// Simulate ObjC response after update
+		responseJSON := simulateCalendarsResponse([]Calendar{
+			{ID: "cal-123", Title: "Renamed Calendar", Type: CalendarTypeCalDAV, Color: "#FF0000", Source: "iCloud", ReadOnly: false},
+		})
+
+		cals, err := parseCalendarsJSON(responseJSON)
+		if err != nil {
+			t.Fatalf("parse error: %v", err)
+		}
+		if cals[0].Title != "Renamed Calendar" {
+			t.Errorf("Title = %q", cals[0].Title)
+		}
+	})
+
+	t.Run("change color", func(t *testing.T) {
+		color := "#00FF00"
+		data, err := marshalUpdateCalendarInput(UpdateCalendarInput{Color: &color})
+		if err != nil {
+			t.Fatalf("marshal error: %v", err)
+		}
+
+		var m map[string]any
+		json.Unmarshal(data, &m)
+		if m["color"] != "#00FF00" {
+			t.Errorf("color = %v", m["color"])
+		}
+	})
+}
+
+func TestMockCalendarCRUDErrorCases(t *testing.T) {
+	t.Run("immutable error is distinct", func(t *testing.T) {
+		if errors.Is(ErrImmutable, ErrNotFound) {
+			t.Error("ErrImmutable should not match ErrNotFound")
+		}
+		if errors.Is(ErrImmutable, ErrUnsupported) {
+			t.Error("ErrImmutable should not match ErrUnsupported")
+		}
+	})
+}
+
 func TestCreateInputMarshalParseSymmetry(t *testing.T) {
 	// What we marshal for create should be parseable as an event response
 	// (after the ObjC bridge creates the event and returns it)

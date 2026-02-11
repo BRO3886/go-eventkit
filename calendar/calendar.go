@@ -66,6 +66,11 @@ var (
 	// ErrNotFound is returned by [Client.Event], [Client.UpdateEvent], and
 	// [Client.DeleteEvent] when no event matches the given ID.
 	ErrNotFound = errors.New("calendar: not found")
+
+	// ErrImmutable is returned by [Client.UpdateCalendar] and
+	// [Client.DeleteCalendar] when the target calendar is immutable
+	// (e.g., subscribed or birthday calendars).
+	ErrImmutable = errors.New("calendar: calendar is immutable")
 )
 
 // Client provides access to macOS Calendar via EventKit.
@@ -405,6 +410,32 @@ type UpdateEventInput struct {
 	// StructuredLocation updates the geographic location. Set to non-nil to
 	// update, leave nil to keep unchanged.
 	StructuredLocation *eventkit.StructuredLocation `json:"structuredLocation,omitempty"`
+}
+
+// CreateCalendarInput contains the fields for creating a new calendar via
+// [Client.CreateCalendar].
+//
+// Title is required. Source and Color are optional.
+type CreateCalendarInput struct {
+	// Title is the display name for the new calendar (required).
+	Title string
+	// Source is the account name to create the calendar in (e.g., "iCloud").
+	// If empty, the default source for new events is used.
+	Source string
+	// Color is the calendar's display color as a hex string (e.g., "#FF6961").
+	// If empty, the system default color is used.
+	Color string
+}
+
+// UpdateCalendarInput contains fields for updating an existing calendar via
+// [Client.UpdateCalendar].
+//
+// Only non-nil pointer fields are modified. Nil fields are left unchanged.
+type UpdateCalendarInput struct {
+	// Title renames the calendar.
+	Title *string
+	// Color changes the calendar's display color (hex string, e.g., "#FF6961").
+	Color *string
 }
 
 // applyOptions applies ListOption functions and returns the resulting options.

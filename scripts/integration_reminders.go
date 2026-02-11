@@ -382,6 +382,109 @@ func main() {
 		}
 	}
 
+	// --- Test 24: Create reminder list ---
+	testList, err := client.CreateList(reminders.CreateListInput{
+		Title: "[go-eventkit test] Integration List",
+		Color: "#FF6961",
+	})
+	check("Create reminder list", err)
+
+	var testListID string
+	if err == nil {
+		testListID = testList.ID
+		log.Printf("  Created list: %q (ID: %s)", testList.Title, truncateID(testList.ID))
+		log.Printf("  Color: %s, Source: %s, Count: %d, ReadOnly: %v", testList.Color, testList.Source, testList.Count, testList.ReadOnly)
+	}
+
+	// --- Test 25: Verify new list appears in lists ---
+	if testListID != "" {
+		allLists, err := client.Lists()
+		check("Verify new list in lists", err)
+		if err == nil {
+			found := false
+			for _, l := range allLists {
+				if l.ID == testListID {
+					found = true
+					log.Printf("  Found new list: %q", l.Title)
+					break
+				}
+			}
+			if !found {
+				log.Printf("  FAIL: New list not found in lists")
+				failed++
+			}
+		}
+	}
+
+	// --- Test 26: Update list (rename + recolor) ---
+	if testListID != "" {
+		newTitle := "[go-eventkit test] Renamed List"
+		newColor := "#00FF00"
+		updatedList, err := client.UpdateList(testListID, reminders.UpdateListInput{
+			Title: &newTitle,
+			Color: &newColor,
+		})
+		check("Update list (rename + recolor)", err)
+		if err == nil {
+			if updatedList.Title != newTitle {
+				log.Printf("  FAIL: Title not updated: got %q, want %q", updatedList.Title, newTitle)
+				failed++
+			} else {
+				log.Printf("  Renamed list to: %q", updatedList.Title)
+			}
+		}
+	}
+
+	// --- Test 27: Create reminder in new list ---
+	var listTestReminderID string
+	if testListID != "" {
+		listTestReminder, err := client.CreateReminder(reminders.CreateReminderInput{
+			Title:    "[go-eventkit test] Reminder in New List",
+			ListName: "[go-eventkit test] Renamed List",
+			Notes:    "Created by go-eventkit integration test. Safe to delete.",
+		})
+		check("Create reminder in new list", err)
+		if err == nil {
+			listTestReminderID = listTestReminder.ID
+			log.Printf("  Created reminder in new list: %q", listTestReminder.Title)
+		}
+	}
+
+	// --- Test 28: Delete reminder in new list before deleting list ---
+	if listTestReminderID != "" {
+		err := client.DeleteReminder(listTestReminderID)
+		check("Delete reminder in new list", err)
+	}
+
+	// --- Test 29: Delete list ---
+	if testListID != "" {
+		err := client.DeleteList(testListID)
+		check("Delete list", err)
+		if err == nil {
+			log.Printf("  Deleted list: %s", truncateID(testListID))
+		}
+	}
+
+	// --- Test 30: Verify deleted list is gone ---
+	if testListID != "" {
+		allLists, err := client.Lists()
+		check("Verify deleted list is gone", err)
+		if err == nil {
+			found := false
+			for _, l := range allLists {
+				if l.ID == testListID {
+					found = true
+				}
+			}
+			if found {
+				log.Printf("  FAIL: Deleted list still in lists")
+				failed++
+			} else {
+				log.Printf("  Deleted list confirmed gone")
+			}
+		}
+	}
+
 	// --- Cleanup: Delete all test reminders ---
 	log.Println("\n--- Cleanup ---")
 	cleanupIDs := []string{createdID, alarmReminderID, urlReminderID, relAlarmID, recDailyID, recWeeklyID}

@@ -39,6 +39,22 @@ char* ek_cal_update_event(const char* event_id, const char* json_input, int span
 // Returns NULL on error.
 char* ek_cal_delete_event(const char* event_id, int span);
 
+// ek_cal_create_calendar creates a new calendar from the given JSON input.
+// Returns the created calendar as JSON. Caller must free.
+// Returns NULL on error.
+char* ek_cal_create_calendar(const char* json_input);
+
+// ek_cal_update_calendar updates an existing calendar.
+// calendar_id is the calendarIdentifier, json_input contains fields to update.
+// Returns the updated calendar as JSON. Caller must free.
+// Returns NULL on error (including immutable calendars).
+char* ek_cal_update_calendar(const char* calendar_id, const char* json_input);
+
+// ek_cal_delete_calendar deletes a calendar.
+// Returns "ok" on success. Caller must free.
+// Returns NULL on error (including immutable calendars).
+char* ek_cal_delete_calendar(const char* calendar_id);
+
 // ek_cal_free frees a string returned by the above functions.
 void ek_cal_free(char* ptr);
 

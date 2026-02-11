@@ -469,6 +469,111 @@ func main() {
 		failed++
 	}
 
+	// --- Test 25: Create calendar ---
+	testCal, err := client.CreateCalendar(calendar.CreateCalendarInput{
+		Title: "[go-eventkit test] Integration Cal",
+		Color: "#FF6961",
+	})
+	check("Create calendar", err)
+
+	var testCalID string
+	if err == nil {
+		testCalID = testCal.ID
+		log.Printf("  Created calendar: %q (ID: %s)", testCal.Title, testCal.ID[:8]+"...")
+		log.Printf("  Color: %s, Source: %s, ReadOnly: %v", testCal.Color, testCal.Source, testCal.ReadOnly)
+	}
+
+	// --- Test 26: Verify new calendar appears in list ---
+	if testCalID != "" {
+		cals, err := client.Calendars()
+		check("Verify new calendar in list", err)
+		if err == nil {
+			found := false
+			for _, c := range cals {
+				if c.ID == testCalID {
+					found = true
+					log.Printf("  Found new calendar in list: %q", c.Title)
+					break
+				}
+			}
+			if !found {
+				log.Printf("  FAIL: New calendar not found in list")
+				failed++
+			}
+		}
+	}
+
+	// --- Test 27: Update calendar (rename + recolor) ---
+	if testCalID != "" {
+		newTitle := "[go-eventkit test] Renamed Cal"
+		newColor := "#00FF00"
+		updatedCal, err := client.UpdateCalendar(testCalID, calendar.UpdateCalendarInput{
+			Title: &newTitle,
+			Color: &newColor,
+		})
+		check("Update calendar (rename + recolor)", err)
+		if err == nil {
+			if updatedCal.Title != newTitle {
+				log.Printf("  FAIL: Title not updated: got %q, want %q", updatedCal.Title, newTitle)
+				failed++
+			} else {
+				log.Printf("  Renamed calendar to: %q", updatedCal.Title)
+			}
+		}
+	}
+
+	// --- Test 28: Create event in new calendar ---
+	var calTestEventID string
+	if testCalID != "" {
+		calTestEvent, err := client.CreateEvent(calendar.CreateEventInput{
+			Title:     "[go-eventkit test] Event in New Cal",
+			StartDate: testStart.Add(11 * time.Hour),
+			EndDate:   testStart.Add(12 * time.Hour),
+			Calendar:  "[go-eventkit test] Renamed Cal",
+			Notes:     "Created by go-eventkit integration test. Safe to delete.",
+		})
+		check("Create event in new calendar", err)
+		if err == nil {
+			calTestEventID = calTestEvent.ID
+			log.Printf("  Created event in new calendar: %q", calTestEvent.Title)
+		}
+	}
+
+	// --- Test 29: Delete event in new calendar before deleting calendar ---
+	if calTestEventID != "" {
+		err := client.DeleteEvent(calTestEventID, calendar.SpanFutureEvents)
+		check("Delete event in new calendar", err)
+	}
+
+	// --- Test 30: Delete calendar ---
+	if testCalID != "" {
+		err := client.DeleteCalendar(testCalID)
+		check("Delete calendar", err)
+		if err == nil {
+			log.Printf("  Deleted calendar: %s", testCalID[:8]+"...")
+		}
+	}
+
+	// --- Test 31: Verify deleted calendar is gone ---
+	if testCalID != "" {
+		cals, err := client.Calendars()
+		check("Verify deleted calendar is gone", err)
+		if err == nil {
+			found := false
+			for _, c := range cals {
+				if c.ID == testCalID {
+					found = true
+				}
+			}
+			if found {
+				log.Printf("  FAIL: Deleted calendar still in list")
+				failed++
+			} else {
+				log.Printf("  Deleted calendar confirmed gone")
+			}
+		}
+	}
+
 	// --- Cleanup: Delete all test events ---
 	log.Println("\n--- Cleanup ---")
 	cleanupIDs := []string{createdID, workEventID, familyEventID, tzEventID, urlEventID, alertEventID, weeklyRecEventID, locEventID}

@@ -850,6 +850,199 @@ char* ek_cal_update_event(const char* event_id, const char* json_input, int span
     }
 }
 
+// --- Find source by name (case-insensitive) ---
+
+static EKSource* find_source_by_name(EKEventStore* store, NSString* name) {
+    NSString* lowerName = [name lowercaseString];
+    for (EKSource* source in store.sources) {
+        if ([[source.title lowercaseString] isEqualToString:lowerName]) {
+            return source;
+        }
+    }
+    return nil;
+}
+
+// --- Parse hex color string to CGColorRef ---
+
+static CGColorRef parse_hex_color(NSString* hex) {
+    if (!hex || hex.length < 7) return NULL;
+    NSString* clean = hex;
+    if ([clean hasPrefix:@"#"]) {
+        clean = [clean substringFromIndex:1];
+    }
+    if (clean.length != 6) return NULL;
+
+    unsigned int r, g, b;
+    NSScanner* scanner;
+
+    scanner = [NSScanner scannerWithString:[clean substringWithRange:NSMakeRange(0, 2)]];
+    if (![scanner scanHexInt:&r]) return NULL;
+    scanner = [NSScanner scannerWithString:[clean substringWithRange:NSMakeRange(2, 2)]];
+    if (![scanner scanHexInt:&g]) return NULL;
+    scanner = [NSScanner scannerWithString:[clean substringWithRange:NSMakeRange(4, 2)]];
+    if (![scanner scanHexInt:&b]) return NULL;
+
+    return CGColorCreateGenericRGB(r / 255.0, g / 255.0, b / 255.0, 1.0);
+}
+
+// --- Calendar CRUD ---
+
+char* ek_cal_create_calendar(const char* json_input) {
+    @autoreleasepool {
+        cal_set_error(nil);
+        if (!json_input) {
+            cal_set_error(@"JSON input is required");
+            return NULL;
+        }
+
+        EKEventStore* store = get_store();
+
+        // Parse JSON input.
+        NSData* data = [NSData dataWithBytes:json_input length:strlen(json_input)];
+        NSError* parseError = nil;
+        NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
+        if (!input) {
+            cal_set_error([NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription]);
+            return NULL;
+        }
+
+        EKCalendar* cal = [EKCalendar calendarForEntityType:EKEntityTypeEvent eventStore:store];
+
+        // Title (required).
+        cal.title = input[@"title"] ?: @"";
+
+        // Source.
+        if (input[@"source"] && input[@"source"] != [NSNull null] && [input[@"source"] length] > 0) {
+            EKSource* source = find_source_by_name(store, input[@"source"]);
+            if (!source) {
+                cal_set_error([NSString stringWithFormat:@"source not found: %@", input[@"source"]]);
+                return NULL;
+            }
+            cal.source = source;
+        } else {
+            // Use the default calendar's source.
+            EKCalendar* defaultCal = [store defaultCalendarForNewEvents];
+            if (defaultCal && defaultCal.source) {
+                cal.source = defaultCal.source;
+            }
+        }
+
+        // Color.
+        if (input[@"color"] && input[@"color"] != [NSNull null] && [input[@"color"] length] > 0) {
+            CGColorRef color = parse_hex_color(input[@"color"]);
+            if (color) {
+                cal.CGColor = color;
+                CGColorRelease(color);
+            }
+        }
+
+        // Save.
+        NSError* saveError = nil;
+        BOOL saved = [store saveCalendar:cal commit:YES error:&saveError];
+        if (!saved) {
+            cal_set_error([NSString stringWithFormat:@"failed to save calendar: %@",
+                saveError.localizedDescription]);
+            return NULL;
+        }
+
+        return to_json(calendar_to_dict(cal));
+    }
+}
+
+char* ek_cal_update_calendar(const char* calendar_id, const char* json_input) {
+    @autoreleasepool {
+        cal_set_error(nil);
+        if (!calendar_id || !json_input) {
+            cal_set_error(@"calendar ID and JSON input are required");
+            return NULL;
+        }
+
+        EKEventStore* store = get_store();
+        NSString* calId = [NSString stringWithUTF8String:calendar_id];
+
+        EKCalendar* cal = find_calendar_by_id(store, calId);
+        if (!cal) {
+            cal_set_error([NSString stringWithFormat:@"calendar not found: %s", calendar_id]);
+            return NULL;
+        }
+
+        // Check immutability.
+        if (cal.isImmutable) {
+            cal_set_error([NSString stringWithFormat:@"calendar is immutable: %@", cal.title]);
+            return NULL;
+        }
+
+        // Parse JSON input.
+        NSData* data = [NSData dataWithBytes:json_input length:strlen(json_input)];
+        NSError* parseError = nil;
+        NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
+        if (!input) {
+            cal_set_error([NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription]);
+            return NULL;
+        }
+
+        // Update title.
+        if (input[@"title"] && input[@"title"] != [NSNull null]) {
+            cal.title = input[@"title"];
+        }
+
+        // Update color.
+        if (input[@"color"] && input[@"color"] != [NSNull null]) {
+            CGColorRef color = parse_hex_color(input[@"color"]);
+            if (color) {
+                cal.CGColor = color;
+                CGColorRelease(color);
+            }
+        }
+
+        // Save.
+        NSError* saveError = nil;
+        BOOL saved = [store saveCalendar:cal commit:YES error:&saveError];
+        if (!saved) {
+            cal_set_error([NSString stringWithFormat:@"failed to update calendar: %@",
+                saveError.localizedDescription]);
+            return NULL;
+        }
+
+        return to_json(calendar_to_dict(cal));
+    }
+}
+
+char* ek_cal_delete_calendar(const char* calendar_id) {
+    @autoreleasepool {
+        cal_set_error(nil);
+        if (!calendar_id) {
+            cal_set_error(@"calendar ID is required");
+            return NULL;
+        }
+
+        EKEventStore* store = get_store();
+        NSString* calId = [NSString stringWithUTF8String:calendar_id];
+
+        EKCalendar* cal = find_calendar_by_id(store, calId);
+        if (!cal) {
+            cal_set_error([NSString stringWithFormat:@"calendar not found: %s", calendar_id]);
+            return NULL;
+        }
+
+        // Check immutability.
+        if (cal.isImmutable) {
+            cal_set_error([NSString stringWithFormat:@"calendar is immutable: %@", cal.title]);
+            return NULL;
+        }
+
+        NSError* removeError = nil;
+        BOOL removed = [store removeCalendar:cal commit:YES error:&removeError];
+        if (!removed) {
+            cal_set_error([NSString stringWithFormat:@"failed to delete calendar: %@",
+                removeError.localizedDescription]);
+            return NULL;
+        }
+
+        return strdup("ok");
+    }
+}
+
 char* ek_cal_delete_event(const char* event_id, int span) {
     @autoreleasepool {
         cal_set_error(nil);

@@ -47,6 +47,22 @@ char* ek_rem_complete_reminder(const char* reminder_id);
 // Returns the updated reminder as JSON, or NULL on error.
 char* ek_rem_uncomplete_reminder(const char* reminder_id);
 
+// ek_rem_create_list creates a new reminder list from the given JSON input.
+// Returns the created list as JSON. Caller must free.
+// Returns NULL on error.
+char* ek_rem_create_list(const char* json_input);
+
+// ek_rem_update_list updates an existing reminder list.
+// list_id is the calendarIdentifier, json_input contains fields to update.
+// Returns the updated list as JSON. Caller must free.
+// Returns NULL on error (including immutable lists).
+char* ek_rem_update_list(const char* list_id, const char* json_input);
+
+// ek_rem_delete_list deletes a reminder list.
+// Returns "ok" on success. Caller must free.
+// Returns NULL on error (including immutable lists).
+char* ek_rem_delete_list(const char* list_id);
+
 // ek_rem_free frees a string returned by the above functions.
 void ek_rem_free(char* ptr);
 

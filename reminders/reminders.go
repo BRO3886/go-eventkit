@@ -86,6 +86,10 @@ var (
 	// [Client.DeleteReminder], [Client.CompleteReminder], and
 	// [Client.UncompleteReminder] when no reminder matches the given ID.
 	ErrNotFound = errors.New("reminders: not found")
+
+	// ErrImmutable is returned by [Client.UpdateList] and
+	// [Client.DeleteList] when the target list is immutable.
+	ErrImmutable = errors.New("reminders: list is immutable")
 )
 
 // Reminder represents a single reminder item (EKReminder).
@@ -253,6 +257,32 @@ func WithDueBefore(t time.Time) ListOption {
 // WithDueAfter filters reminders due after the given date.
 func WithDueAfter(t time.Time) ListOption {
 	return func(o *listOptions) { o.dueAfter = &t }
+}
+
+// CreateListInput contains the fields for creating a new reminder list via
+// [Client.CreateList].
+//
+// Title is required. Source and Color are optional.
+type CreateListInput struct {
+	// Title is the display name for the new list (required).
+	Title string
+	// Source is the account name to create the list in (e.g., "iCloud").
+	// If empty, the default source for new reminders is used.
+	Source string
+	// Color is the list's display color as a hex string (e.g., "#FF6961").
+	// If empty, the system default color is used.
+	Color string
+}
+
+// UpdateListInput contains fields for updating an existing reminder list via
+// [Client.UpdateList].
+//
+// Only non-nil pointer fields are modified. Nil fields are left unchanged.
+type UpdateListInput struct {
+	// Title renames the list.
+	Title *string
+	// Color changes the list's display color (hex string, e.g., "#FF6961").
+	Color *string
 }
 
 func applyOptions(opts []ListOption) *listOptions {

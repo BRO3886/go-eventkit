@@ -176,6 +176,95 @@ func (c *Client) DeleteEvent(id string, span Span) error {
 	return nil
 }
 
+// CreateCalendar creates a new calendar and returns it with its assigned ID.
+// The calendar is saved to the EventKit store immediately.
+func (c *Client) CreateCalendar(input CreateCalendarInput) (*Calendar, error) {
+	jsonBytes, err := marshalCreateCalendarInput(input)
+	if err != nil {
+		return nil, fmt.Errorf("calendar: failed to marshal input: %w", err)
+	}
+
+	cJSON := C.CString(string(jsonBytes))
+	defer C.free(unsafe.Pointer(cJSON))
+
+	cstr := C.ek_cal_create_calendar(cJSON)
+	if cstr == nil {
+		return nil, getLastError("failed to create calendar")
+	}
+	defer C.ek_cal_free(cstr)
+
+	jsonStr := C.GoString(cstr)
+	cals, err := parseCalendarsJSON("[" + jsonStr + "]")
+	if err != nil {
+		return nil, err
+	}
+	if len(cals) == 0 {
+		return nil, fmt.Errorf("calendar: unexpected empty response")
+	}
+	return &cals[0], nil
+}
+
+// UpdateCalendar updates an existing calendar and returns the updated version.
+// Only non-nil fields in the input are modified.
+// Returns [ErrNotFound] if the calendar does not exist.
+// Returns [ErrImmutable] if the calendar is immutable.
+func (c *Client) UpdateCalendar(id string, input UpdateCalendarInput) (*Calendar, error) {
+	jsonBytes, err := marshalUpdateCalendarInput(input)
+	if err != nil {
+		return nil, fmt.Errorf("calendar: failed to marshal input: %w", err)
+	}
+
+	cID := C.CString(id)
+	defer C.free(unsafe.Pointer(cID))
+	cJSON := C.CString(string(jsonBytes))
+	defer C.free(unsafe.Pointer(cJSON))
+
+	cstr := C.ek_cal_update_calendar(cID, cJSON)
+	if cstr == nil {
+		err := getLastError("failed to update calendar: " + id)
+		if strings.Contains(err.Error(), "not found") {
+			return nil, ErrNotFound
+		}
+		if strings.Contains(err.Error(), "immutable") {
+			return nil, ErrImmutable
+		}
+		return nil, err
+	}
+	defer C.ek_cal_free(cstr)
+
+	jsonStr := C.GoString(cstr)
+	cals, err := parseCalendarsJSON("[" + jsonStr + "]")
+	if err != nil {
+		return nil, err
+	}
+	if len(cals) == 0 {
+		return nil, fmt.Errorf("calendar: unexpected empty response")
+	}
+	return &cals[0], nil
+}
+
+// DeleteCalendar permanently removes a calendar and all its events.
+// Returns [ErrNotFound] if the calendar does not exist.
+// Returns [ErrImmutable] if the calendar is immutable.
+func (c *Client) DeleteCalendar(id string) error {
+	cID := C.CString(id)
+	defer C.free(unsafe.Pointer(cID))
+
+	cstr := C.ek_cal_delete_calendar(cID)
+	if cstr == nil {
+		err := getLastError("failed to delete calendar: " + id)
+		if strings.Contains(err.Error(), "not found") {
+			return ErrNotFound
+		}
+		if strings.Contains(err.Error(), "immutable") {
+			return ErrImmutable
+		}
+		return err
+	}
+	defer C.ek_cal_free(cstr)
+	return nil
+}
+
 // getLastError reads the last error from the ObjC bridge.
 func getLastError(fallback string) error {
 	cerr := C.ek_cal_last_error()

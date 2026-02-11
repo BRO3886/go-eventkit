@@ -390,6 +390,34 @@ func marshalCreateInput(input CreateEventInput) ([]byte, error) {
 	return json.Marshal(j)
 }
 
+// --- JSON marshaling for calendar writes ---
+
+type createCalendarJSON struct {
+	Title  string `json:"title"`
+	Source string `json:"source,omitempty"`
+	Color  string `json:"color,omitempty"`
+}
+
+func marshalCreateCalendarInput(input CreateCalendarInput) ([]byte, error) {
+	j := createCalendarJSON{
+		Title:  input.Title,
+		Source: input.Source,
+		Color:  input.Color,
+	}
+	return json.Marshal(j)
+}
+
+func marshalUpdateCalendarInput(input UpdateCalendarInput) ([]byte, error) {
+	m := make(map[string]any)
+	if input.Title != nil {
+		m["title"] = *input.Title
+	}
+	if input.Color != nil {
+		m["color"] = *input.Color
+	}
+	return json.Marshal(m)
+}
+
 func marshalUpdateInput(input UpdateEventInput) ([]byte, error) {
 	m := make(map[string]any)
 

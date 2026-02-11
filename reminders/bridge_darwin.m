@@ -805,6 +805,213 @@ char* ek_rem_delete_reminder(const char* reminder_id) {
     }
 }
 
+// --- Find source by name (case-insensitive) ---
+
+static EKSource* find_source_by_name(EKEventStore* store, NSString* name) {
+    NSString* lowerName = [name lowercaseString];
+    for (EKSource* source in store.sources) {
+        if ([[source.title lowercaseString] isEqualToString:lowerName]) {
+            return source;
+        }
+    }
+    return nil;
+}
+
+// --- Find list (calendar) by ID ---
+
+static EKCalendar* find_list_by_id(EKEventStore* store, NSString* listId) {
+    for (EKCalendar* cal in [store calendarsForEntityType:EKEntityTypeReminder]) {
+        if ([cal.calendarIdentifier isEqualToString:listId]) {
+            return cal;
+        }
+    }
+    return nil;
+}
+
+// --- Parse hex color string to CGColorRef ---
+
+static CGColorRef parse_hex_color(NSString* hex) {
+    if (!hex || hex.length < 7) return NULL;
+    NSString* clean = hex;
+    if ([clean hasPrefix:@"#"]) {
+        clean = [clean substringFromIndex:1];
+    }
+    if (clean.length != 6) return NULL;
+
+    unsigned int r, g, b;
+    NSScanner* scanner;
+
+    scanner = [NSScanner scannerWithString:[clean substringWithRange:NSMakeRange(0, 2)]];
+    if (![scanner scanHexInt:&r]) return NULL;
+    scanner = [NSScanner scannerWithString:[clean substringWithRange:NSMakeRange(2, 2)]];
+    if (![scanner scanHexInt:&g]) return NULL;
+    scanner = [NSScanner scannerWithString:[clean substringWithRange:NSMakeRange(4, 2)]];
+    if (![scanner scanHexInt:&b]) return NULL;
+
+    return CGColorCreateGenericRGB(r / 255.0, g / 255.0, b / 255.0, 1.0);
+}
+
+// --- List CRUD ---
+
+char* ek_rem_create_list(const char* json_input) {
+    @autoreleasepool {
+        rem_set_error(nil);
+        if (!json_input) {
+            rem_set_error(@"JSON input is required");
+            return NULL;
+        }
+
+        EKEventStore* store = get_store();
+
+        // Parse JSON input.
+        NSData* data = [NSData dataWithBytes:json_input length:strlen(json_input)];
+        NSError* parseError = nil;
+        NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
+        if (!input) {
+            rem_set_error([NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription]);
+            return NULL;
+        }
+
+        EKCalendar* cal = [EKCalendar calendarForEntityType:EKEntityTypeReminder eventStore:store];
+
+        // Title (required).
+        cal.title = input[@"title"] ?: @"";
+
+        // Source.
+        if (input[@"source"] && input[@"source"] != [NSNull null] && [input[@"source"] length] > 0) {
+            EKSource* source = find_source_by_name(store, input[@"source"]);
+            if (!source) {
+                rem_set_error([NSString stringWithFormat:@"source not found: %@", input[@"source"]]);
+                return NULL;
+            }
+            cal.source = source;
+        } else {
+            // Use the default reminders calendar's source.
+            EKCalendar* defaultCal = [store defaultCalendarForNewReminders];
+            if (defaultCal && defaultCal.source) {
+                cal.source = defaultCal.source;
+            }
+        }
+
+        // Color.
+        if (input[@"color"] && input[@"color"] != [NSNull null] && [input[@"color"] length] > 0) {
+            CGColorRef color = parse_hex_color(input[@"color"]);
+            if (color) {
+                cal.CGColor = color;
+                CGColorRelease(color);
+            }
+        }
+
+        // Save.
+        NSError* saveError = nil;
+        BOOL saved = [store saveCalendar:cal commit:YES error:&saveError];
+        if (!saved) {
+            rem_set_error([NSString stringWithFormat:@"failed to save list: %@",
+                saveError.localizedDescription]);
+            return NULL;
+        }
+
+        // Count is 0 for a newly created list.
+        return to_json(list_to_dict(cal, 0));
+    }
+}
+
+char* ek_rem_update_list(const char* list_id, const char* json_input) {
+    @autoreleasepool {
+        rem_set_error(nil);
+        if (!list_id || !json_input) {
+            rem_set_error(@"list ID and JSON input are required");
+            return NULL;
+        }
+
+        EKEventStore* store = get_store();
+        NSString* listIdStr = [NSString stringWithUTF8String:list_id];
+
+        EKCalendar* cal = find_list_by_id(store, listIdStr);
+        if (!cal) {
+            rem_set_error([NSString stringWithFormat:@"list not found: %s", list_id]);
+            return NULL;
+        }
+
+        // Check immutability.
+        if (cal.isImmutable) {
+            rem_set_error([NSString stringWithFormat:@"list is immutable: %@", cal.title]);
+            return NULL;
+        }
+
+        // Parse JSON input.
+        NSData* data = [NSData dataWithBytes:json_input length:strlen(json_input)];
+        NSError* parseError = nil;
+        NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
+        if (!input) {
+            rem_set_error([NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription]);
+            return NULL;
+        }
+
+        // Update title.
+        if (input[@"title"] && input[@"title"] != [NSNull null]) {
+            cal.title = input[@"title"];
+        }
+
+        // Update color.
+        if (input[@"color"] && input[@"color"] != [NSNull null]) {
+            CGColorRef color = parse_hex_color(input[@"color"]);
+            if (color) {
+                cal.CGColor = color;
+                CGColorRelease(color);
+            }
+        }
+
+        // Save.
+        NSError* saveError = nil;
+        BOOL saved = [store saveCalendar:cal commit:YES error:&saveError];
+        if (!saved) {
+            rem_set_error([NSString stringWithFormat:@"failed to update list: %@",
+                saveError.localizedDescription]);
+            return NULL;
+        }
+
+        // Get updated reminder count.
+        NSArray<EKReminder*>* reminders = fetch_all_reminders(@[cal]);
+        return to_json(list_to_dict(cal, (int)reminders.count));
+    }
+}
+
+char* ek_rem_delete_list(const char* list_id) {
+    @autoreleasepool {
+        rem_set_error(nil);
+        if (!list_id) {
+            rem_set_error(@"list ID is required");
+            return NULL;
+        }
+
+        EKEventStore* store = get_store();
+        NSString* listIdStr = [NSString stringWithUTF8String:list_id];
+
+        EKCalendar* cal = find_list_by_id(store, listIdStr);
+        if (!cal) {
+            rem_set_error([NSString stringWithFormat:@"list not found: %s", list_id]);
+            return NULL;
+        }
+
+        // Check immutability.
+        if (cal.isImmutable) {
+            rem_set_error([NSString stringWithFormat:@"list is immutable: %@", cal.title]);
+            return NULL;
+        }
+
+        NSError* removeError = nil;
+        BOOL removed = [store removeCalendar:cal commit:YES error:&removeError];
+        if (!removed) {
+            rem_set_error([NSString stringWithFormat:@"failed to delete list: %@",
+                removeError.localizedDescription]);
+            return NULL;
+        }
+
+        return strdup("ok");
+    }
+}
+
 char* ek_rem_complete_reminder(const char* reminder_id) {
     @autoreleasepool {
         rem_set_error(nil);

@@ -506,6 +506,108 @@ func TestMockTimezoneSymmetry(t *testing.T) {
 	}
 }
 
+// --- List CRUD mock tests ---
+
+func TestMockCreateListRoundtrip(t *testing.T) {
+	// Simulate: Go marshals CreateListInput -> ObjC creates list -> returns JSON -> Go parses
+	input := CreateListInput{
+		Title:  "Shopping",
+		Source: "iCloud",
+		Color:  "#FF6961",
+	}
+
+	jsonStr, err := marshalCreateListInput(input)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var m map[string]any
+	json.Unmarshal([]byte(jsonStr), &m)
+	if m["title"] != "Shopping" {
+		t.Errorf("title = %v", m["title"])
+	}
+	if m["source"] != "iCloud" {
+		t.Errorf("source = %v", m["source"])
+	}
+	if m["color"] != "#FF6961" {
+		t.Errorf("color = %v", m["color"])
+	}
+
+	// Simulate ObjC response: a single list JSON wrapped in array for parsing
+	responseJSON := simulateListsResponse([]List{
+		{ID: "new-list-123", Title: "Shopping", Color: "#FF6961", Source: "iCloud", Count: 0, ReadOnly: false},
+	})
+
+	lists, err := parseListsJSON(responseJSON)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+	if len(lists) != 1 {
+		t.Fatalf("expected 1 list, got %d", len(lists))
+	}
+	if lists[0].ID != "new-list-123" {
+		t.Errorf("ID = %q", lists[0].ID)
+	}
+	if lists[0].Title != "Shopping" {
+		t.Errorf("Title = %q", lists[0].Title)
+	}
+	if lists[0].Count != 0 {
+		t.Errorf("Count = %d, want 0 for new list", lists[0].Count)
+	}
+}
+
+func TestMockUpdateListRoundtrip(t *testing.T) {
+	t.Run("rename list", func(t *testing.T) {
+		title := "Groceries"
+		jsonStr, err := marshalUpdateListInput(UpdateListInput{Title: &title})
+		if err != nil {
+			t.Fatalf("marshal error: %v", err)
+		}
+
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+		if m["title"] != "Groceries" {
+			t.Errorf("title = %v", m["title"])
+		}
+		if _, ok := m["color"]; ok {
+			t.Error("color should not be in update when nil")
+		}
+
+		// Simulate ObjC response after update
+		responseJSON := simulateListsResponse([]List{
+			{ID: "list-123", Title: "Groceries", Color: "#FF0000", Source: "iCloud", Count: 5, ReadOnly: false},
+		})
+
+		lists, err := parseListsJSON(responseJSON)
+		if err != nil {
+			t.Fatalf("parse error: %v", err)
+		}
+		if lists[0].Title != "Groceries" {
+			t.Errorf("Title = %q", lists[0].Title)
+		}
+	})
+
+	t.Run("change color", func(t *testing.T) {
+		color := "#00FF00"
+		jsonStr, err := marshalUpdateListInput(UpdateListInput{Color: &color})
+		if err != nil {
+			t.Fatalf("marshal error: %v", err)
+		}
+
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+		if m["color"] != "#00FF00" {
+			t.Errorf("color = %v", m["color"])
+		}
+	})
+}
+
+func TestMockListCRUDSentinelErrors(t *testing.T) {
+	if ErrImmutable.Error() != "reminders: list is immutable" {
+		t.Errorf("ErrImmutable = %q", ErrImmutable.Error())
+	}
+}
+
 func TestMockEdgeCases(t *testing.T) {
 	t.Run("reminder with all nil optional fields", func(t *testing.T) {
 		jsonStr := `{

@@ -524,6 +524,20 @@ func TestMarshalUpdateInput(t *testing.T) {
 			t.Errorf("expected empty map, got %d entries", len(m))
 		}
 	})
+
+	t.Run("update remind me date", func(t *testing.T) {
+		remind := time.Date(2026, 3, 1, 8, 0, 0, 0, time.UTC)
+		input := UpdateReminderInput{RemindMeDate: &remind}
+		jsonStr, err := marshalUpdateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+		if m["remindMeDate"] != "2026-03-01T08:00:00.000Z" {
+			t.Errorf("remindMeDate = %v", m["remindMeDate"])
+		}
+	})
 }
 
 // --- Sentinel Error Tests ---
@@ -717,6 +731,174 @@ func TestJSONRoundtrip(t *testing.T) {
 			t.Errorf("Title = %q", r.Title)
 		}
 	})
+}
+
+// --- parseOptionalTime edge case ---
+
+func TestParseOptionalTime(t *testing.T) {
+	t.Run("nil returns nil", func(t *testing.T) {
+		if got := parseOptionalTime(nil); got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+	})
+
+	t.Run("empty string returns nil", func(t *testing.T) {
+		s := ""
+		if got := parseOptionalTime(&s); got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+	})
+
+	t.Run("invalid date returns nil", func(t *testing.T) {
+		s := "not-a-date"
+		if got := parseOptionalTime(&s); got != nil {
+			t.Errorf("expected nil for invalid date, got %v", got)
+		}
+	})
+
+	t.Run("valid date returns time", func(t *testing.T) {
+		s := "2026-02-12T09:00:00.000Z"
+		got := parseOptionalTime(&s)
+		if got == nil {
+			t.Fatal("expected non-nil time")
+		}
+		want := time.Date(2026, 2, 12, 9, 0, 0, 0, time.UTC)
+		if !got.Equal(want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+}
+
+// --- parseListsJSON error path ---
+
+func TestParseListsJSONInvalid(t *testing.T) {
+	_, err := parseListsJSON("not valid json")
+	if err == nil {
+		t.Error("expected error for invalid JSON")
+	}
+}
+
+// --- List CRUD marshal tests ---
+
+func TestMarshalCreateListInput(t *testing.T) {
+	t.Run("full input", func(t *testing.T) {
+		input := CreateListInput{
+			Title:  "Shopping",
+			Source: "iCloud",
+			Color:  "#FF6961",
+		}
+		jsonStr, err := marshalCreateListInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(jsonStr), &m); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+		if m["title"] != "Shopping" {
+			t.Errorf("title = %v", m["title"])
+		}
+		if m["source"] != "iCloud" {
+			t.Errorf("source = %v", m["source"])
+		}
+		if m["color"] != "#FF6961" {
+			t.Errorf("color = %v", m["color"])
+		}
+	})
+
+	t.Run("minimal input omits optional fields", func(t *testing.T) {
+		input := CreateListInput{Title: "Work"}
+		jsonStr, err := marshalCreateListInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+
+		if m["title"] != "Work" {
+			t.Errorf("title = %v", m["title"])
+		}
+		if _, ok := m["source"]; ok {
+			t.Error("source should be omitted when empty")
+		}
+		if _, ok := m["color"]; ok {
+			t.Error("color should be omitted when empty")
+		}
+	})
+}
+
+func TestMarshalUpdateListInput(t *testing.T) {
+	t.Run("update title only", func(t *testing.T) {
+		title := "New Name"
+		input := UpdateListInput{Title: &title}
+		jsonStr, err := marshalUpdateListInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+
+		if m["title"] != "New Name" {
+			t.Errorf("title = %v", m["title"])
+		}
+		if _, ok := m["color"]; ok {
+			t.Error("color should not be present when nil")
+		}
+	})
+
+	t.Run("update color only", func(t *testing.T) {
+		color := "#00FF00"
+		input := UpdateListInput{Color: &color}
+		jsonStr, err := marshalUpdateListInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+
+		if m["color"] != "#00FF00" {
+			t.Errorf("color = %v", m["color"])
+		}
+		if _, ok := m["title"]; ok {
+			t.Error("title should not be present when nil")
+		}
+	})
+
+	t.Run("update both", func(t *testing.T) {
+		title := "Renamed"
+		color := "#AABBCC"
+		input := UpdateListInput{Title: &title, Color: &color}
+		jsonStr, err := marshalUpdateListInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+
+		if m["title"] != "Renamed" {
+			t.Errorf("title = %v", m["title"])
+		}
+		if m["color"] != "#AABBCC" {
+			t.Errorf("color = %v", m["color"])
+		}
+	})
+
+	t.Run("empty update produces empty object", func(t *testing.T) {
+		input := UpdateListInput{}
+		jsonStr, err := marshalUpdateListInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if jsonStr != "{}" {
+			t.Errorf("got %s, want {}", jsonStr)
+		}
+	})
+}
+
+func TestSentinelErrorImmutable(t *testing.T) {
+	if ErrImmutable.Error() != "reminders: list is immutable" {
+		t.Errorf("ErrImmutable = %q", ErrImmutable.Error())
+	}
 }
 
 // --- Recurrence Rule Tests ---
@@ -916,6 +1098,142 @@ func TestMarshalCreateInputWithRecurrence(t *testing.T) {
 		json.Unmarshal([]byte(jsonStr), &m)
 		if _, ok := m["recurrenceRules"]; ok {
 			t.Error("recurrenceRules should not be present for empty rules")
+		}
+	})
+}
+
+func TestMarshalRecurrenceRulesComprehensive(t *testing.T) {
+	t.Run("yearly with all constraint arrays", func(t *testing.T) {
+		endDate := time.Date(2030, 12, 31, 0, 0, 0, 0, time.UTC)
+		rules := []eventkit.RecurrenceRule{
+			{
+				Frequency:       eventkit.FrequencyYearly,
+				Interval:        1,
+				MonthsOfTheYear: []int{3, 6, 9, 12},
+				WeeksOfTheYear:  []int{1, 26, 52},
+				DaysOfTheYear:   []int{1, 100, 365},
+				SetPositions:    []int{1, -1},
+				DaysOfTheWeek: []eventkit.RecurrenceDayOfWeek{
+					{DayOfTheWeek: eventkit.Monday, WeekNumber: 2},
+				},
+				End: &eventkit.RecurrenceEnd{
+					EndDate: &endDate,
+				},
+			},
+		}
+
+		input := CreateReminderInput{
+			Title:           "Complex recurrence",
+			RecurrenceRules: rules,
+		}
+		jsonStr, err := marshalCreateInput(input)
+		if err != nil {
+			t.Fatalf("marshal error: %v", err)
+		}
+
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+
+		rr := m["recurrenceRules"].([]any)
+		rule := rr[0].(map[string]any)
+
+		if rule["frequency"] != float64(3) {
+			t.Errorf("frequency = %v, want 3 (yearly)", rule["frequency"])
+		}
+
+		months := rule["monthsOfTheYear"].([]any)
+		if len(months) != 4 {
+			t.Errorf("monthsOfTheYear = %d, want 4", len(months))
+		}
+
+		weeks := rule["weeksOfTheYear"].([]any)
+		if len(weeks) != 3 {
+			t.Errorf("weeksOfTheYear = %d, want 3", len(weeks))
+		}
+
+		daysYear := rule["daysOfTheYear"].([]any)
+		if len(daysYear) != 3 {
+			t.Errorf("daysOfTheYear = %d, want 3", len(daysYear))
+		}
+
+		positions := rule["setPositions"].([]any)
+		if len(positions) != 2 {
+			t.Errorf("setPositions = %d, want 2", len(positions))
+		}
+
+		days := rule["daysOfTheWeek"].([]any)
+		if len(days) != 1 {
+			t.Errorf("daysOfTheWeek = %d, want 1", len(days))
+		}
+
+		end := rule["end"].(map[string]any)
+		if end["endDate"] != "2030-12-31T00:00:00.000Z" {
+			t.Errorf("endDate = %v", end["endDate"])
+		}
+	})
+
+	t.Run("monthly with days of month", func(t *testing.T) {
+		rules := []eventkit.RecurrenceRule{
+			{
+				Frequency:      eventkit.FrequencyMonthly,
+				Interval:       1,
+				DaysOfTheMonth: []int{1, 15, -1},
+			},
+		}
+
+		input := CreateReminderInput{
+			Title:           "Monthly",
+			RecurrenceRules: rules,
+		}
+		jsonStr, err := marshalCreateInput(input)
+		if err != nil {
+			t.Fatalf("marshal error: %v", err)
+		}
+
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+
+		rr := m["recurrenceRules"].([]any)
+		rule := rr[0].(map[string]any)
+
+		daysMonth := rule["daysOfTheMonth"].([]any)
+		if len(daysMonth) != 3 {
+			t.Errorf("daysOfTheMonth = %d, want 3", len(daysMonth))
+		}
+	})
+
+	t.Run("recurrence with occurrence count end", func(t *testing.T) {
+		rules := []eventkit.RecurrenceRule{
+			{
+				Frequency: eventkit.FrequencyDaily,
+				Interval:  1,
+				End: &eventkit.RecurrenceEnd{
+					OccurrenceCount: 10,
+				},
+			},
+		}
+
+		input := CreateReminderInput{
+			Title:           "Count end",
+			RecurrenceRules: rules,
+		}
+		jsonStr, err := marshalCreateInput(input)
+		if err != nil {
+			t.Fatalf("marshal error: %v", err)
+		}
+
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+
+		rr := m["recurrenceRules"].([]any)
+		rule := rr[0].(map[string]any)
+		end := rule["end"].(map[string]any)
+
+		if end["occurrenceCount"] != float64(10) {
+			t.Errorf("occurrenceCount = %v, want 10", end["occurrenceCount"])
+		}
+		if _, ok := end["endDate"]; ok {
+			t.Error("endDate should not be present when using occurrence count")
 		}
 	})
 }
