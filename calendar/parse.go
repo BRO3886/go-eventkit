@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/BRO3886/go-eventkit"
 )
 
 // rawEvent is the intermediate JSON representation from the ObjC bridge.
@@ -170,10 +172,10 @@ func convertRawEvent(r rawEvent) Event {
 	}
 
 	// Convert recurrence rules.
-	e.RecurrenceRules = make([]RecurrenceRule, len(r.RecurrenceRules))
+	e.RecurrenceRules = make([]eventkit.RecurrenceRule, len(r.RecurrenceRules))
 	for i, rr := range r.RecurrenceRules {
-		rule := RecurrenceRule{
-			Frequency:       RecurrenceFrequency(rr.Frequency),
+		rule := eventkit.RecurrenceRule{
+			Frequency:       eventkit.RecurrenceFrequency(rr.Frequency),
 			Interval:        rr.Interval,
 			DaysOfTheMonth:  rr.DaysOfTheMonth,
 			MonthsOfTheYear: rr.MonthsOfTheYear,
@@ -182,13 +184,13 @@ func convertRawEvent(r rawEvent) Event {
 			SetPositions:    rr.SetPositions,
 		}
 		for _, dow := range rr.DaysOfTheWeek {
-			rule.DaysOfTheWeek = append(rule.DaysOfTheWeek, RecurrenceDayOfWeek{
-				DayOfTheWeek: Weekday(dow.DayOfTheWeek),
+			rule.DaysOfTheWeek = append(rule.DaysOfTheWeek, eventkit.RecurrenceDayOfWeek{
+				DayOfTheWeek: eventkit.Weekday(dow.DayOfTheWeek),
 				WeekNumber:   dow.WeekNumber,
 			})
 		}
 		if rr.End != nil {
-			end := &RecurrenceEnd{
+			end := &eventkit.RecurrenceEnd{
 				OccurrenceCount: rr.End.OccurrenceCount,
 			}
 			if rr.End.EndDate != nil {
@@ -204,7 +206,7 @@ func convertRawEvent(r rawEvent) Event {
 
 	// Convert structured location.
 	if r.StructuredLocation != nil {
-		sl := &StructuredLocation{
+		sl := &eventkit.StructuredLocation{
 			Title: r.StructuredLocation.Title,
 		}
 		if r.StructuredLocation.Latitude != nil {
@@ -315,7 +317,7 @@ type structuredLocationJSON struct {
 	Radius    float64 `json:"radius,omitempty"`
 }
 
-func marshalRecurrenceRules(rules []RecurrenceRule) []recurrenceRuleJSON {
+func marshalRecurrenceRules(rules []eventkit.RecurrenceRule) []recurrenceRuleJSON {
 	result := make([]recurrenceRuleJSON, len(rules))
 	for i, r := range rules {
 		rj := recurrenceRuleJSON{
@@ -347,7 +349,7 @@ func marshalRecurrenceRules(rules []RecurrenceRule) []recurrenceRuleJSON {
 	return result
 }
 
-func marshalStructuredLocation(sl *StructuredLocation) *structuredLocationJSON {
+func marshalStructuredLocation(sl *eventkit.StructuredLocation) *structuredLocationJSON {
 	if sl == nil {
 		return nil
 	}

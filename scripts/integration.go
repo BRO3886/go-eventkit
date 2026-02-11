@@ -12,6 +12,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/BRO3886/go-eventkit"
 	"github.com/BRO3886/go-eventkit/calendar"
 )
 
@@ -288,8 +289,8 @@ func main() {
 		EndDate:   dailyRecEnd,
 		Calendar:  "Home",
 		Notes:     "Created by go-eventkit integration test. Safe to delete.",
-		RecurrenceRules: []calendar.RecurrenceRule{
-			calendar.Daily(1).Count(5),
+		RecurrenceRules: []eventkit.RecurrenceRule{
+			eventkit.Daily(1).Count(5),
 		},
 	})
 	check("Create event with daily recurrence", err)
@@ -307,8 +308,8 @@ func main() {
 			failed++
 		} else {
 			rule := dailyRecEvent.RecurrenceRules[0]
-			if rule.Frequency != calendar.FrequencyDaily {
-				log.Printf("  FAIL: Frequency = %d, want %d (daily)", rule.Frequency, calendar.FrequencyDaily)
+			if rule.Frequency != eventkit.FrequencyDaily {
+				log.Printf("  FAIL: Frequency = %d, want %d (daily)", rule.Frequency, eventkit.FrequencyDaily)
 				failed++
 			}
 			if rule.Interval != 1 {
@@ -333,8 +334,8 @@ func main() {
 		EndDate:   weeklyRecEnd,
 		Calendar:  "Home",
 		Notes:     "Created by go-eventkit integration test. Safe to delete.",
-		RecurrenceRules: []calendar.RecurrenceRule{
-			calendar.Weekly(2, calendar.Monday, calendar.Wednesday, calendar.Friday).Until(endDate),
+		RecurrenceRules: []eventkit.RecurrenceRule{
+			eventkit.Weekly(2, eventkit.Monday, eventkit.Wednesday, eventkit.Friday).Until(endDate),
 		},
 	})
 	check("Create event with weekly recurrence (MWF every 2 weeks)", err)
@@ -345,8 +346,8 @@ func main() {
 		log.Printf("  Created weekly recurring event: %q, Recurring=%v", weeklyRecEvent.Title, weeklyRecEvent.Recurring)
 		if len(weeklyRecEvent.RecurrenceRules) == 1 {
 			rule := weeklyRecEvent.RecurrenceRules[0]
-			if rule.Frequency != calendar.FrequencyWeekly {
-				log.Printf("  FAIL: Frequency = %d, want %d (weekly)", rule.Frequency, calendar.FrequencyWeekly)
+			if rule.Frequency != eventkit.FrequencyWeekly {
+				log.Printf("  FAIL: Frequency = %d, want %d (weekly)", rule.Frequency, eventkit.FrequencyWeekly)
 				failed++
 			}
 			if rule.Interval != 2 {
@@ -372,7 +373,7 @@ func main() {
 		EndDate:   testStart.Add(10 * time.Hour),
 		Calendar:  "Home",
 		Notes:     "Created by go-eventkit integration test. Safe to delete.",
-		StructuredLocation: &calendar.StructuredLocation{
+		StructuredLocation: &eventkit.StructuredLocation{
 			Title:     "Apple Park",
 			Latitude:  37.3349,
 			Longitude: -122.0090,
@@ -417,7 +418,7 @@ func main() {
 
 	// --- Test 20: Update event to add recurrence rule ---
 	if createdID != "" {
-		addRules := []calendar.RecurrenceRule{calendar.Daily(1).Count(3)}
+		addRules := []eventkit.RecurrenceRule{eventkit.Daily(1).Count(3)}
 		updated, err := client.UpdateEvent(createdID, calendar.UpdateEventInput{
 			RecurrenceRules: &addRules,
 		}, calendar.SpanThisEvent)
@@ -434,7 +435,7 @@ func main() {
 
 	// --- Test 21: Update event to remove recurrence ---
 	if createdID != "" {
-		emptyRules := []calendar.RecurrenceRule{}
+		emptyRules := []eventkit.RecurrenceRule{}
 		updated, err := client.UpdateEvent(createdID, calendar.UpdateEventInput{
 			RecurrenceRules: &emptyRules,
 		}, calendar.SpanThisEvent)

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/BRO3886/go-eventkit"
 )
 
 // These tests use a mock bridge layer to test the Client method logic
@@ -703,8 +705,8 @@ func TestMockRecurrenceRuleRoundtrip(t *testing.T) {
 		if len(event.RecurrenceRules) != 1 {
 			t.Fatalf("RecurrenceRules count = %d, want 1", len(event.RecurrenceRules))
 		}
-		if event.RecurrenceRules[0].Frequency != FrequencyDaily {
-			t.Errorf("Frequency = %d, want %d", event.RecurrenceRules[0].Frequency, FrequencyDaily)
+		if event.RecurrenceRules[0].Frequency != eventkit.FrequencyDaily {
+			t.Errorf("Frequency = %d, want %d", event.RecurrenceRules[0].Frequency, eventkit.FrequencyDaily)
 		}
 		if event.RecurrenceRules[0].Interval != 1 {
 			t.Errorf("Interval = %d, want 1", event.RecurrenceRules[0].Interval)
@@ -763,8 +765,8 @@ func TestMockRecurrenceRuleRoundtrip(t *testing.T) {
 			Title:     "Recurring Meeting",
 			StartDate: time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC),
 			EndDate:   time.Date(2026, 2, 12, 11, 0, 0, 0, time.UTC),
-			RecurrenceRules: []RecurrenceRule{
-				Weekly(1, Monday, Wednesday, Friday).Until(endDate),
+			RecurrenceRules: []eventkit.RecurrenceRule{
+				eventkit.Weekly(1, eventkit.Monday, eventkit.Wednesday, eventkit.Friday).Until(endDate),
 			},
 		}
 
@@ -852,7 +854,7 @@ func TestMockStructuredLocationRoundtrip(t *testing.T) {
 			Title:     "Location Meeting",
 			StartDate: time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC),
 			EndDate:   time.Date(2026, 2, 12, 11, 0, 0, 0, time.UTC),
-			StructuredLocation: &StructuredLocation{
+			StructuredLocation: &eventkit.StructuredLocation{
 				Title:     "NYC Office",
 				Latitude:  40.7128,
 				Longitude: -74.0060,
@@ -1034,8 +1036,8 @@ func TestMockRecurrenceEdgeCases(t *testing.T) {
 		if len(rule.DaysOfTheWeek) != 1 {
 			t.Fatalf("DaysOfTheWeek count = %d, want 1", len(rule.DaysOfTheWeek))
 		}
-		if rule.DaysOfTheWeek[0].DayOfTheWeek != Tuesday {
-			t.Errorf("DayOfTheWeek = %d, want %d (Tuesday)", rule.DaysOfTheWeek[0].DayOfTheWeek, Tuesday)
+		if rule.DaysOfTheWeek[0].DayOfTheWeek != eventkit.Tuesday {
+			t.Errorf("DayOfTheWeek = %d, want %d (Tuesday)", rule.DaysOfTheWeek[0].DayOfTheWeek, eventkit.Tuesday)
 		}
 		if rule.DaysOfTheWeek[0].WeekNumber != 2 {
 			t.Errorf("WeekNumber = %d, want 2", rule.DaysOfTheWeek[0].WeekNumber)

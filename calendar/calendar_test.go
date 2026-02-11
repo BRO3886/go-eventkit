@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/BRO3886/go-eventkit"
 )
 
 // --- Enum String() tests ---
@@ -1234,179 +1236,6 @@ func TestEnumValues(t *testing.T) {
 	}
 }
 
-// --- Recurrence frequency String() tests ---
-
-func TestRecurrenceFrequencyString(t *testing.T) {
-	tests := []struct {
-		f    RecurrenceFrequency
-		want string
-	}{
-		{FrequencyDaily, "daily"},
-		{FrequencyWeekly, "weekly"},
-		{FrequencyMonthly, "monthly"},
-		{FrequencyYearly, "yearly"},
-		{RecurrenceFrequency(99), "unknown"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.want, func(t *testing.T) {
-			if got := tt.f.String(); got != tt.want {
-				t.Errorf("RecurrenceFrequency(%d).String() = %q, want %q", tt.f, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestWeekdayString(t *testing.T) {
-	tests := []struct {
-		w    Weekday
-		want string
-	}{
-		{Sunday, "sunday"},
-		{Monday, "monday"},
-		{Tuesday, "tuesday"},
-		{Wednesday, "wednesday"},
-		{Thursday, "thursday"},
-		{Friday, "friday"},
-		{Saturday, "saturday"},
-		{Weekday(99), "unknown"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.want, func(t *testing.T) {
-			if got := tt.w.String(); got != tt.want {
-				t.Errorf("Weekday(%d).String() = %q, want %q", tt.w, got, tt.want)
-			}
-		})
-	}
-}
-
-// --- Convenience constructor tests ---
-
-func TestDailyConstructor(t *testing.T) {
-	r := Daily(1)
-	if r.Frequency != FrequencyDaily {
-		t.Errorf("Frequency = %d, want %d", r.Frequency, FrequencyDaily)
-	}
-	if r.Interval != 1 {
-		t.Errorf("Interval = %d, want 1", r.Interval)
-	}
-	if r.End != nil {
-		t.Error("End should be nil")
-	}
-}
-
-func TestWeeklyConstructor(t *testing.T) {
-	r := Weekly(2, Monday, Friday)
-	if r.Frequency != FrequencyWeekly {
-		t.Errorf("Frequency = %d, want %d", r.Frequency, FrequencyWeekly)
-	}
-	if r.Interval != 2 {
-		t.Errorf("Interval = %d, want 2", r.Interval)
-	}
-	if len(r.DaysOfTheWeek) != 2 {
-		t.Fatalf("DaysOfTheWeek count = %d, want 2", len(r.DaysOfTheWeek))
-	}
-	if r.DaysOfTheWeek[0].DayOfTheWeek != Monday {
-		t.Errorf("DaysOfTheWeek[0] = %d, want %d (Monday)", r.DaysOfTheWeek[0].DayOfTheWeek, Monday)
-	}
-	if r.DaysOfTheWeek[1].DayOfTheWeek != Friday {
-		t.Errorf("DaysOfTheWeek[1] = %d, want %d (Friday)", r.DaysOfTheWeek[1].DayOfTheWeek, Friday)
-	}
-}
-
-func TestWeeklyConstructorNoDays(t *testing.T) {
-	r := Weekly(1)
-	if r.Frequency != FrequencyWeekly {
-		t.Errorf("Frequency = %d, want %d", r.Frequency, FrequencyWeekly)
-	}
-	if len(r.DaysOfTheWeek) != 0 {
-		t.Errorf("DaysOfTheWeek should be empty, got %d", len(r.DaysOfTheWeek))
-	}
-}
-
-func TestMonthlyConstructor(t *testing.T) {
-	r := Monthly(1, 1, 15)
-	if r.Frequency != FrequencyMonthly {
-		t.Errorf("Frequency = %d, want %d", r.Frequency, FrequencyMonthly)
-	}
-	if r.Interval != 1 {
-		t.Errorf("Interval = %d, want 1", r.Interval)
-	}
-	if len(r.DaysOfTheMonth) != 2 {
-		t.Fatalf("DaysOfTheMonth count = %d, want 2", len(r.DaysOfTheMonth))
-	}
-	if r.DaysOfTheMonth[0] != 1 || r.DaysOfTheMonth[1] != 15 {
-		t.Errorf("DaysOfTheMonth = %v, want [1 15]", r.DaysOfTheMonth)
-	}
-}
-
-func TestYearlyConstructor(t *testing.T) {
-	r := Yearly(1)
-	if r.Frequency != FrequencyYearly {
-		t.Errorf("Frequency = %d, want %d", r.Frequency, FrequencyYearly)
-	}
-	if r.Interval != 1 {
-		t.Errorf("Interval = %d, want 1", r.Interval)
-	}
-}
-
-func TestUntilChain(t *testing.T) {
-	end := time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC)
-	r := Daily(1).Until(end)
-	if r.End == nil {
-		t.Fatal("End should not be nil")
-	}
-	if r.End.EndDate == nil {
-		t.Fatal("EndDate should not be nil")
-	}
-	if !r.End.EndDate.Equal(end) {
-		t.Errorf("EndDate = %v, want %v", r.End.EndDate, end)
-	}
-	if r.End.OccurrenceCount != 0 {
-		t.Errorf("OccurrenceCount = %d, want 0", r.End.OccurrenceCount)
-	}
-}
-
-func TestCountChain(t *testing.T) {
-	r := Weekly(1, Monday).Count(10)
-	if r.End == nil {
-		t.Fatal("End should not be nil")
-	}
-	if r.End.OccurrenceCount != 10 {
-		t.Errorf("OccurrenceCount = %d, want 10", r.End.OccurrenceCount)
-	}
-	if r.End.EndDate != nil {
-		t.Error("EndDate should be nil for count-based")
-	}
-}
-
-// --- Recurrence rule enum values match EventKit ---
-
-func TestRecurrenceEnumValues(t *testing.T) {
-	if FrequencyDaily != 0 {
-		t.Errorf("FrequencyDaily = %d, want 0", FrequencyDaily)
-	}
-	if FrequencyWeekly != 1 {
-		t.Errorf("FrequencyWeekly = %d, want 1", FrequencyWeekly)
-	}
-	if FrequencyMonthly != 2 {
-		t.Errorf("FrequencyMonthly = %d, want 2", FrequencyMonthly)
-	}
-	if FrequencyYearly != 3 {
-		t.Errorf("FrequencyYearly = %d, want 3", FrequencyYearly)
-	}
-
-	// EKWeekday values
-	if Sunday != 1 {
-		t.Errorf("Sunday = %d, want 1", Sunday)
-	}
-	if Monday != 2 {
-		t.Errorf("Monday = %d, want 2", Monday)
-	}
-	if Saturday != 7 {
-		t.Errorf("Saturday = %d, want 7", Saturday)
-	}
-}
-
 // --- Recurrence rule parsing tests ---
 
 func TestParseEventJSONWithRecurrenceRules(t *testing.T) {
@@ -1449,8 +1278,8 @@ func TestParseEventJSONWithRecurrenceRules(t *testing.T) {
 		}
 
 		rule := event.RecurrenceRules[0]
-		if rule.Frequency != FrequencyDaily {
-			t.Errorf("Frequency = %d, want %d (daily)", rule.Frequency, FrequencyDaily)
+		if rule.Frequency != eventkit.FrequencyDaily {
+			t.Errorf("Frequency = %d, want %d (daily)", rule.Frequency, eventkit.FrequencyDaily)
 		}
 		if rule.Interval != 1 {
 			t.Errorf("Interval = %d, want 1", rule.Interval)
@@ -1497,8 +1326,8 @@ func TestParseEventJSONWithRecurrenceRules(t *testing.T) {
 		}
 
 		rule := event.RecurrenceRules[0]
-		if rule.Frequency != FrequencyWeekly {
-			t.Errorf("Frequency = %d, want %d (weekly)", rule.Frequency, FrequencyWeekly)
+		if rule.Frequency != eventkit.FrequencyWeekly {
+			t.Errorf("Frequency = %d, want %d (weekly)", rule.Frequency, eventkit.FrequencyWeekly)
 		}
 		if rule.Interval != 2 {
 			t.Errorf("Interval = %d, want 2", rule.Interval)
@@ -1506,14 +1335,14 @@ func TestParseEventJSONWithRecurrenceRules(t *testing.T) {
 		if len(rule.DaysOfTheWeek) != 3 {
 			t.Fatalf("DaysOfTheWeek count = %d, want 3", len(rule.DaysOfTheWeek))
 		}
-		if rule.DaysOfTheWeek[0].DayOfTheWeek != Monday {
-			t.Errorf("DaysOfTheWeek[0] = %d, want %d (Monday)", rule.DaysOfTheWeek[0].DayOfTheWeek, Monday)
+		if rule.DaysOfTheWeek[0].DayOfTheWeek != eventkit.Monday {
+			t.Errorf("DaysOfTheWeek[0] = %d, want %d (Monday)", rule.DaysOfTheWeek[0].DayOfTheWeek, eventkit.Monday)
 		}
-		if rule.DaysOfTheWeek[1].DayOfTheWeek != Wednesday {
-			t.Errorf("DaysOfTheWeek[1] = %d, want %d (Wednesday)", rule.DaysOfTheWeek[1].DayOfTheWeek, Wednesday)
+		if rule.DaysOfTheWeek[1].DayOfTheWeek != eventkit.Wednesday {
+			t.Errorf("DaysOfTheWeek[1] = %d, want %d (Wednesday)", rule.DaysOfTheWeek[1].DayOfTheWeek, eventkit.Wednesday)
 		}
-		if rule.DaysOfTheWeek[2].DayOfTheWeek != Friday {
-			t.Errorf("DaysOfTheWeek[2] = %d, want %d (Friday)", rule.DaysOfTheWeek[2].DayOfTheWeek, Friday)
+		if rule.DaysOfTheWeek[2].DayOfTheWeek != eventkit.Friday {
+			t.Errorf("DaysOfTheWeek[2] = %d, want %d (Friday)", rule.DaysOfTheWeek[2].DayOfTheWeek, eventkit.Friday)
 		}
 		if rule.End == nil {
 			t.Fatal("End should not be nil")
@@ -1556,8 +1385,8 @@ func TestParseEventJSONWithRecurrenceRules(t *testing.T) {
 		}
 
 		rule := event.RecurrenceRules[0]
-		if rule.Frequency != FrequencyMonthly {
-			t.Errorf("Frequency = %d, want %d (monthly)", rule.Frequency, FrequencyMonthly)
+		if rule.Frequency != eventkit.FrequencyMonthly {
+			t.Errorf("Frequency = %d, want %d (monthly)", rule.Frequency, eventkit.FrequencyMonthly)
 		}
 		if len(rule.DaysOfTheMonth) != 3 {
 			t.Fatalf("DaysOfTheMonth count = %d, want 3", len(rule.DaysOfTheMonth))
@@ -1615,8 +1444,8 @@ func TestParseEventJSONWithRecurrenceRules(t *testing.T) {
 		}
 
 		rule := event.RecurrenceRules[0]
-		if rule.Frequency != FrequencyYearly {
-			t.Errorf("Frequency = %d, want %d (yearly)", rule.Frequency, FrequencyYearly)
+		if rule.Frequency != eventkit.FrequencyYearly {
+			t.Errorf("Frequency = %d, want %d (yearly)", rule.Frequency, eventkit.FrequencyYearly)
 		}
 		if len(rule.MonthsOfTheYear) != 2 {
 			t.Fatalf("MonthsOfTheYear count = %d, want 2", len(rule.MonthsOfTheYear))
@@ -1832,8 +1661,8 @@ func TestMarshalCreateInputWithRecurrence(t *testing.T) {
 			Title:     "Daily Sync",
 			StartDate: time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC),
 			EndDate:   time.Date(2026, 2, 12, 10, 30, 0, 0, time.UTC),
-			RecurrenceRules: []RecurrenceRule{
-				Daily(1).Count(30),
+			RecurrenceRules: []eventkit.RecurrenceRule{
+				eventkit.Daily(1).Count(30),
 			},
 		}
 
@@ -1873,8 +1702,8 @@ func TestMarshalCreateInputWithRecurrence(t *testing.T) {
 			Title:     "MWF Standup",
 			StartDate: time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC),
 			EndDate:   time.Date(2026, 2, 12, 10, 30, 0, 0, time.UTC),
-			RecurrenceRules: []RecurrenceRule{
-				Weekly(1, Monday, Wednesday, Friday).Until(endDate),
+			RecurrenceRules: []eventkit.RecurrenceRule{
+				eventkit.Weekly(1, eventkit.Monday, eventkit.Wednesday, eventkit.Friday).Until(endDate),
 			},
 		}
 
@@ -1934,7 +1763,7 @@ func TestMarshalCreateInputWithStructuredLocation(t *testing.T) {
 			Title:     "Apple Park Meeting",
 			StartDate: time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC),
 			EndDate:   time.Date(2026, 2, 12, 11, 0, 0, 0, time.UTC),
-			StructuredLocation: &StructuredLocation{
+			StructuredLocation: &eventkit.StructuredLocation{
 				Title:     "Apple Park",
 				Latitude:  37.3349,
 				Longitude: -122.0090,
@@ -1991,7 +1820,7 @@ func TestMarshalCreateInputWithStructuredLocation(t *testing.T) {
 
 func TestMarshalUpdateInputWithRecurrence(t *testing.T) {
 	t.Run("add recurrence rule", func(t *testing.T) {
-		rules := []RecurrenceRule{Daily(1)}
+		rules := []eventkit.RecurrenceRule{eventkit.Daily(1)}
 		input := UpdateEventInput{
 			RecurrenceRules: &rules,
 		}
@@ -2014,7 +1843,7 @@ func TestMarshalUpdateInputWithRecurrence(t *testing.T) {
 	})
 
 	t.Run("remove recurrence with empty slice", func(t *testing.T) {
-		rules := []RecurrenceRule{}
+		rules := []eventkit.RecurrenceRule{}
 		input := UpdateEventInput{
 			RecurrenceRules: &rules,
 		}
@@ -2056,7 +1885,7 @@ func TestMarshalUpdateInputWithRecurrence(t *testing.T) {
 func TestMarshalUpdateInputWithStructuredLocation(t *testing.T) {
 	t.Run("update structured location", func(t *testing.T) {
 		input := UpdateEventInput{
-			StructuredLocation: &StructuredLocation{
+			StructuredLocation: &eventkit.StructuredLocation{
 				Title:     "New Location",
 				Latitude:  40.7128,
 				Longitude: -74.0060,
