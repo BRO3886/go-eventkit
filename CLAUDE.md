@@ -14,43 +14,51 @@ A Go library providing native macOS EventKit bindings via cgo + Objective-C. Exp
 ## Architecture
 ```
 go-eventkit/
+├── eventkit.go                  # Shared types: RecurrenceRule, StructuredLocation, Weekday, etc.
+├── eventkit_test.go             # Tests for shared types and convenience constructors
 ├── calendar/                    # Public: Calendar event bindings (Phase 1 — COMPLETE)
 │   ├── calendar.go              # Go types: Event, Calendar, Client, options
 │   ├── parse.go                 # JSON parsing/marshaling (platform-agnostic, no build tags)
 │   ├── bridge_darwin.go         # cgo wrappers (//go:build darwin)
-│   ├── bridge_darwin.m          # ObjC EventKit bridge for EKEvent (~624 lines)
+│   ├── bridge_darwin.m          # ObjC EventKit bridge for EKEvent
 │   ├── bridge_darwin.h          # C header
 │   ├── bridge_other.go          # !darwin stubs
-│   ├── calendar_test.go         # Unit tests (26+ tests)
+│   ├── calendar_test.go         # Unit tests
 │   └── bridge_mock_test.go      # Mock bridge tests (JSON contract)
 ├── reminders/                   # Public: Reminder bindings (Phase 2 — COMPLETE)
 │   ├── reminders.go             # Go types: Reminder, List, Client, options
 │   ├── parse.go                 # JSON parsing/marshaling (platform-agnostic, no build tags)
 │   ├── bridge_darwin.go         # cgo wrappers
-│   ├── bridge_darwin.m          # ObjC EventKit bridge for EKReminder (~682 lines)
+│   ├── bridge_darwin.m          # ObjC EventKit bridge for EKReminder
 │   ├── bridge_darwin.h          # C header
 │   ├── bridge_other.go          # !darwin stubs
-│   ├── reminders_test.go        # Unit tests (26 tests)
+│   ├── reminders_test.go        # Unit tests
 │   └── bridge_mock_test.go      # Mock bridge tests (JSON contract)
 ├── scripts/                     # Integration tests (require real EventKit)
-│   ├── integration.go           # 17 calendar integration tests
-│   └── integration_reminders.go # 19 reminder integration tests
+│   ├── integration.go           # 24 calendar integration tests
+│   └── integration_reminders.go # 23 reminder integration tests
 ├── docs/
 │   ├── prd/
-│   │   ├── go-eventkit-prd.md       # Full PRD with API design
-│   │   └── concurrency-prd.md       # Deferred concurrency improvements (3 phases)
+│   │   ├── go-eventkit-prd.md           # Full PRD with API design
+│   │   ├── concurrency-prd.md           # Deferred concurrency improvements (3 phases)
+│   │   ├── recurrence-location-prd.md   # Recurrence rules & structured locations (DONE)
+│   │   ├── benchmarking-prd.md          # Performance benchmarking (planned)
+│   │   └── future-capabilities-prd.md   # Deferred capabilities (10 items)
 │   └── research/
 │       ├── eventkit-framework-comprehensive.md
 │       └── go-concurrency-cgo-eventkit.md
-├── journals/                    # Engineering journals (4 sessions)
+├── journals/                    # Engineering journals (7 sessions)
 └── go.mod
 ```
 
 ## Implementation Status
-- **Phase 1**: `calendar/` package — COMPLETE. Full CRUD for Calendar events. Coverage: 58.9%.
-- **Phase 2**: `reminders/` package — COMPLETE. Full CRUD for Reminders (all writes via EventKit, no AppleScript). Coverage: 55.5%.
+- **Root package** (`eventkit.go`): Shared types — RecurrenceRule, StructuredLocation, Weekday, convenience constructors. Coverage: 100%.
+- **Phase 1**: `calendar/` package — COMPLETE. Full CRUD + recurrence rules + structured locations. Coverage: 66.3%.
+- **Phase 2**: `reminders/` package — COMPLETE. Full CRUD + recurrence rules. Coverage: 60.4%.
 - **Phase 3**: Future frameworks (Contacts, etc.) — out of scope for now
-- **Deferred**: Concurrency improvements (inline error returns, serial write queue, context wrappers) — see `docs/prd/concurrency-prd.md`
+- **Deferred**: Concurrency improvements — see `docs/prd/concurrency-prd.md`
+- **Deferred**: Performance benchmarking — see `docs/prd/benchmarking-prd.md`
+- **Deferred**: 10 future capabilities — see `docs/prd/future-capabilities-prd.md`
 
 ## Key Technical Decisions
 - `dispatch_once` for EKEventStore singleton + TCC access request — **each package has its own singleton** (C objects can't cross cgo package boundaries)
@@ -65,6 +73,11 @@ go-eventkit/
 - EventKit sees all accounts (iCloud, Google, Exchange, subscriptions, birthdays)
 - `@(!boolean)` produces integer 0/1, not JSON true/false — use `@YES`/`@NO` ternary
 - `parse.go` files have no build tags — all JSON parsing is fully testable without cgo
+- Shared types live in root `eventkit` package — both `calendar/` and `reminders/` import from root, no cross-dependency
+- Raw bridge types (`rawRecurrenceRule` etc.) duplicated per package — they're unexported and can't be shared across cgo boundaries
+- EKRecurrenceRule: use complex initializer (all constraint arrays accept nil) — one code path for all rule types
+- `*float64` for raw location coordinates to distinguish "not set" from zero (Null Island at 0,0 is valid)
+- EKReminder inherits recurrence from EKCalendarItem — same ObjC bridge pattern as calendar
 
 ## Prior Art
 - This package extracts the proven cgo + ObjC pattern from [rem](https://github.com/BRO3886/rem) (macOS Reminders CLI)

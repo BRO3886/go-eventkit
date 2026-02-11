@@ -38,6 +38,7 @@ import (
     "log"
     "time"
 
+    "github.com/BRO3886/go-eventkit"
     "github.com/BRO3886/go-eventkit/calendar"
 )
 
@@ -76,11 +77,11 @@ func main() {
         StartDate: time.Date(2026, 2, 12, 14, 0, 0, 0, time.Local),
         EndDate:   time.Date(2026, 2, 12, 15, 0, 0, 0, time.Local),
         Calendar:  "Work",
-        RecurrenceRules: []calendar.RecurrenceRule{
-            calendar.Weekly(1, calendar.Monday, calendar.Wednesday, calendar.Friday).
+        RecurrenceRules: []eventkit.RecurrenceRule{
+            eventkit.Weekly(1, eventkit.Monday, eventkit.Wednesday, eventkit.Friday).
                 Until(time.Date(2026, 12, 31, 0, 0, 0, 0, time.Local)),
         },
-        StructuredLocation: &calendar.StructuredLocation{
+        StructuredLocation: &eventkit.StructuredLocation{
             Title:     "Apple Park",
             Latitude:  37.3349,
             Longitude: -122.0090,
@@ -160,7 +161,7 @@ import "github.com/BRO3886/go-eventkit/calendar"
 
 **Filter options:** `WithCalendar(name)`, `WithCalendarID(id)`, `WithSearch(query)`
 
-**Recurrence constructors:** `Daily(interval)`, `Weekly(interval, ...days)`, `Monthly(interval, ...daysOfMonth)`, `Yearly(interval)` — chain with `.Until(time)` or `.Count(n)`
+**Recurrence constructors** (from root `eventkit` package): `eventkit.Daily(interval)`, `eventkit.Weekly(interval, ...days)`, `eventkit.Monthly(interval, ...daysOfMonth)`, `eventkit.Yearly(interval)` — chain with `.Until(time)` or `.Count(n)`
 
 ### Reminders Package
 
@@ -200,6 +201,8 @@ Manage permissions in **System Settings > Privacy & Security > Calendars / Remin
 ## Architecture
 
 ```
+eventkit.go                 # Shared types: RecurrenceRule, StructuredLocation, Weekday, constructors
+
 calendar/                   # Calendar event bindings
 ├── calendar.go             # Go types (no build constraint — importable everywhere)
 ├── parse.go                # JSON parsing/marshaling (platform-agnostic)
@@ -216,6 +219,8 @@ reminders/                  # Reminder bindings
 ├── bridge_darwin.h         # C header
 └── bridge_other.go         # !darwin stubs
 ```
+
+Shared types (recurrence rules, structured locations, weekday constants) live in the root `eventkit` package. Both `calendar/` and `reminders/` import from it — no cross-dependency between sub-packages.
 
 Each package maintains its own `EKEventStore` singleton via `dispatch_once`. ARC (`-fobjc-arc`) is mandatory — without it, Objective-C objects are released prematurely, causing empty results or crashes.
 
