@@ -4,31 +4,57 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/BRO3886/go-eventkit"
 )
 
 // rawReminder is the intermediate JSON representation from the ObjC bridge.
 type rawReminder struct {
-	ID             string     `json:"id"`
-	Title          string     `json:"title"`
-	Notes          *string    `json:"notes"`
-	List           string     `json:"list"`
-	ListID         string     `json:"listID"`
-	DueDate        *string    `json:"dueDate"`
-	RemindMeDate   *string    `json:"remindMeDate"`
-	CompletionDate *string    `json:"completionDate"`
-	CreatedAt      *string    `json:"createdAt"`
-	ModifiedAt     *string    `json:"modifiedAt"`
-	Priority       int        `json:"priority"`
-	Completed      bool       `json:"completed"`
-	Flagged        bool       `json:"flagged"`
-	URL            *string    `json:"url"`
-	HasAlarms      bool       `json:"hasAlarms"`
-	Alarms         []rawAlarm `json:"alarms"`
+	ID              string              `json:"id"`
+	Title           string              `json:"title"`
+	Notes           *string             `json:"notes"`
+	List            string              `json:"list"`
+	ListID          string              `json:"listID"`
+	DueDate         *string             `json:"dueDate"`
+	RemindMeDate    *string             `json:"remindMeDate"`
+	CompletionDate  *string             `json:"completionDate"`
+	CreatedAt       *string             `json:"createdAt"`
+	ModifiedAt      *string             `json:"modifiedAt"`
+	Priority        int                 `json:"priority"`
+	Completed       bool                `json:"completed"`
+	Flagged         bool                `json:"flagged"`
+	URL             *string             `json:"url"`
+	Recurring       bool                `json:"recurring"`
+	RecurrenceRules []rawRecurrenceRule `json:"recurrenceRules"`
+	HasAlarms       bool                `json:"hasAlarms"`
+	Alarms          []rawAlarm          `json:"alarms"`
 }
 
 type rawAlarm struct {
 	AbsoluteDate   *string `json:"absoluteDate"`
 	RelativeOffset float64 `json:"relativeOffset"`
+}
+
+type rawRecurrenceRule struct {
+	Frequency       int                       `json:"frequency"`
+	Interval        int                       `json:"interval"`
+	DaysOfTheWeek   []rawRecurrenceDayOfWeek  `json:"daysOfTheWeek,omitempty"`
+	DaysOfTheMonth  []int                     `json:"daysOfTheMonth,omitempty"`
+	MonthsOfTheYear []int                     `json:"monthsOfTheYear,omitempty"`
+	WeeksOfTheYear  []int                     `json:"weeksOfTheYear,omitempty"`
+	DaysOfTheYear   []int                     `json:"daysOfTheYear,omitempty"`
+	SetPositions    []int                     `json:"setPositions,omitempty"`
+	End             *rawRecurrenceEnd         `json:"end,omitempty"`
+}
+
+type rawRecurrenceDayOfWeek struct {
+	DayOfTheWeek int `json:"dayOfTheWeek"`
+	WeekNumber   int `json:"weekNumber"`
+}
+
+type rawRecurrenceEnd struct {
+	EndDate         *string `json:"endDate,omitempty"`
+	OccurrenceCount int     `json:"occurrenceCount,omitempty"`
 }
 
 // rawList is the intermediate JSON representation of a reminder list.
@@ -98,7 +124,41 @@ func convertRawReminder(r *rawReminder) Reminder {
 		Completed:      r.Completed,
 		Flagged:        r.Flagged,
 		URL:            derefString(r.URL),
+		Recurring:      r.Recurring,
 		HasAlarms:      r.HasAlarms,
+	}
+
+	// Convert recurrence rules.
+	rem.RecurrenceRules = make([]eventkit.RecurrenceRule, len(r.RecurrenceRules))
+	for i, rr := range r.RecurrenceRules {
+		rule := eventkit.RecurrenceRule{
+			Frequency:       eventkit.RecurrenceFrequency(rr.Frequency),
+			Interval:        rr.Interval,
+			DaysOfTheMonth:  rr.DaysOfTheMonth,
+			MonthsOfTheYear: rr.MonthsOfTheYear,
+			WeeksOfTheYear:  rr.WeeksOfTheYear,
+			DaysOfTheYear:   rr.DaysOfTheYear,
+			SetPositions:    rr.SetPositions,
+		}
+		for _, dow := range rr.DaysOfTheWeek {
+			rule.DaysOfTheWeek = append(rule.DaysOfTheWeek, eventkit.RecurrenceDayOfWeek{
+				DayOfTheWeek: eventkit.Weekday(dow.DayOfTheWeek),
+				WeekNumber:   dow.WeekNumber,
+			})
+		}
+		if rr.End != nil {
+			end := &eventkit.RecurrenceEnd{
+				OccurrenceCount: rr.End.OccurrenceCount,
+			}
+			if rr.End.EndDate != nil {
+				t := parseISO8601(*rr.End.EndDate)
+				if !t.IsZero() {
+					end.EndDate = &t
+				}
+			}
+			rule.End = end
+		}
+		rem.RecurrenceRules[i] = rule
 	}
 
 	// Convert alarms.
@@ -201,6 +261,10 @@ func marshalCreateInput(input CreateReminderInput) (string, error) {
 		m["alarms"] = alarms
 	}
 
+	if len(input.RecurrenceRules) > 0 {
+		m["recurrenceRules"] = marshalRecurrenceRules(input.RecurrenceRules)
+	}
+
 	data, err := json.Marshal(m)
 	if err != nil {
 		return "", fmt.Errorf("reminders: failed to marshal create input: %w", err)
@@ -260,9 +324,61 @@ func marshalUpdateInput(input UpdateReminderInput) (string, error) {
 		m["alarms"] = alarms
 	}
 
+	if input.RecurrenceRules != nil {
+		m["recurrenceRules"] = marshalRecurrenceRules(*input.RecurrenceRules)
+	}
+
 	data, err := json.Marshal(m)
 	if err != nil {
 		return "", fmt.Errorf("reminders: failed to marshal update input: %w", err)
 	}
 	return string(data), nil
+}
+
+// marshalRecurrenceRules converts recurrence rules to JSON-serializable format.
+func marshalRecurrenceRules(rules []eventkit.RecurrenceRule) []map[string]any {
+	result := make([]map[string]any, len(rules))
+	for i, r := range rules {
+		rj := map[string]any{
+			"frequency": int(r.Frequency),
+			"interval":  r.Interval,
+		}
+		if len(r.DaysOfTheWeek) > 0 {
+			days := make([]map[string]any, len(r.DaysOfTheWeek))
+			for j, dow := range r.DaysOfTheWeek {
+				days[j] = map[string]any{
+					"dayOfTheWeek": int(dow.DayOfTheWeek),
+					"weekNumber":   dow.WeekNumber,
+				}
+			}
+			rj["daysOfTheWeek"] = days
+		}
+		if len(r.DaysOfTheMonth) > 0 {
+			rj["daysOfTheMonth"] = r.DaysOfTheMonth
+		}
+		if len(r.MonthsOfTheYear) > 0 {
+			rj["monthsOfTheYear"] = r.MonthsOfTheYear
+		}
+		if len(r.WeeksOfTheYear) > 0 {
+			rj["weeksOfTheYear"] = r.WeeksOfTheYear
+		}
+		if len(r.DaysOfTheYear) > 0 {
+			rj["daysOfTheYear"] = r.DaysOfTheYear
+		}
+		if len(r.SetPositions) > 0 {
+			rj["setPositions"] = r.SetPositions
+		}
+		if r.End != nil {
+			ej := map[string]any{}
+			if r.End.EndDate != nil {
+				ej["endDate"] = r.End.EndDate.UTC().Format("2006-01-02T15:04:05.000Z")
+			}
+			if r.End.OccurrenceCount > 0 {
+				ej["occurrenceCount"] = r.End.OccurrenceCount
+			}
+			rj["end"] = ej
+		}
+		result[i] = rj
+	}
+	return result
 }

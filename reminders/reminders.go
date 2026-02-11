@@ -60,6 +60,8 @@ package reminders
 import (
 	"errors"
 	"time"
+
+	"github.com/BRO3886/go-eventkit"
 )
 
 // Client provides access to macOS Reminders via EventKit.
@@ -120,6 +122,12 @@ type Reminder struct {
 	Flagged bool `json:"flagged"`
 	// URL is an optional URL associated with the reminder.
 	URL string `json:"url,omitempty"`
+	// Recurring is true if this reminder has recurrence rules.
+	Recurring bool `json:"recurring"`
+	// RecurrenceRules contains the recurrence patterns for this reminder.
+	// Empty if the reminder is not recurring. EKReminder inherits recurrence
+	// support from EKCalendarItem.
+	RecurrenceRules []eventkit.RecurrenceRule `json:"recurrenceRules,omitempty"`
 	// HasAlarms is true if the reminder has any alarms configured.
 	HasAlarms bool `json:"hasAlarms"`
 	// Alarms lists the notification alarms configured for this reminder.
@@ -277,6 +285,9 @@ type CreateReminderInput struct {
 	URL string
 	// Alarms adds notification alarms to the reminder.
 	Alarms []Alarm
+	// RecurrenceRules sets the recurrence pattern(s) for the reminder.
+	// Most reminders have zero or one rule.
+	RecurrenceRules []eventkit.RecurrenceRule
 }
 
 // UpdateReminderInput holds the parameters for updating a reminder via
@@ -310,4 +321,8 @@ type UpdateReminderInput struct {
 	URL *string
 	// Alarms replaces all existing alarms. Pass an empty slice to remove all alarms.
 	Alarms *[]Alarm
+	// RecurrenceRules replaces all existing recurrence rules.
+	// Pass an empty slice to make the reminder non-recurring.
+	// Pass nil to leave recurrence unchanged.
+	RecurrenceRules *[]eventkit.RecurrenceRule
 }
