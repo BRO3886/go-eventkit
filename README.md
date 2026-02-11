@@ -256,27 +256,44 @@ Manage permissions in **System Settings > Privacy & Security > Calendars / Remin
 
 ## Architecture
 
+```mermaid
+graph LR
+    App["Your Go App"] --> Cal["calendar/"]
+    App --> Rem["reminders/"]
+    Cal --> EK["eventkit.go<br/><i>shared types</i>"]
+    Rem --> EK
+
+    subgraph "calendar/"
+        direction TB
+        CalGo["calendar.go<br/><i>Go types</i>"]
+        CalParse["parse.go<br/><i>JSON ↔ Go</i>"]
+        CalBridge["bridge_darwin.go<br/><i>cgo wrappers</i>"]
+        CalObjC["bridge_darwin.m<br/><i>ObjC bridge</i>"]
+        CalGo --> CalParse --> CalBridge --> CalObjC
+    end
+
+    subgraph "reminders/"
+        direction TB
+        RemGo["reminders.go<br/><i>Go types</i>"]
+        RemParse["parse.go<br/><i>JSON ↔ Go</i>"]
+        RemBridge["bridge_darwin.go<br/><i>cgo wrappers</i>"]
+        RemObjC["bridge_darwin.m<br/><i>ObjC bridge</i>"]
+        RemGo --> RemParse --> RemBridge --> RemObjC
+    end
+
+    CalObjC --> EKStore1["EKEventStore<br/><i>singleton</i>"]
+    RemObjC --> EKStore2["EKEventStore<br/><i>singleton</i>"]
+    EKStore1 --> EventKit["Apple EventKit<br/><i>framework</i>"]
+    EKStore2 --> EventKit
+
+    style App fill:#4a9eff,color:#fff
+    style EventKit fill:#333,color:#fff
+    style EK fill:#f0ad4e,color:#fff
+    style EKStore1 fill:#5cb85c,color:#fff
+    style EKStore2 fill:#5cb85c,color:#fff
 ```
-eventkit.go                 # Shared types: RecurrenceRule, StructuredLocation, Weekday, constructors
 
-calendar/                   # Calendar event bindings
-├── calendar.go             # Go types (no build constraint — importable everywhere)
-├── parse.go                # JSON parsing/marshaling (platform-agnostic)
-├── bridge_darwin.go        # cgo wrappers (darwin only)
-├── bridge_darwin.m         # ObjC EventKit bridge
-├── bridge_darwin.h         # C header
-└── bridge_other.go         # !darwin stubs
-
-reminders/                  # Reminder bindings
-├── reminders.go            # Go types (no build constraint)
-├── parse.go                # JSON parsing/marshaling (platform-agnostic)
-├── bridge_darwin.go        # cgo wrappers (darwin only)
-├── bridge_darwin.m         # ObjC EventKit bridge
-├── bridge_darwin.h         # C header
-└── bridge_other.go         # !darwin stubs
-```
-
-Each package maintains its own `EKEventStore` singleton via `dispatch_once`. The ObjC bridge returns JSON via `char*`, Go parses into typed structs — keeping cgo internal and the public API pure Go.
+The data flow is: **Go types → JSON string → cgo → ObjC → EventKit** (and back). Each package has its own `EKEventStore` singleton — C objects can't cross cgo package boundaries. The public API is pure Go; cgo never leaks to consumers.
 
 ## Known Limitations
 
