@@ -179,6 +179,9 @@ func (c *Client) DeleteEvent(id string, span Span) error {
 // CreateCalendar creates a new calendar and returns it with its assigned ID.
 // The calendar is saved to the EventKit store immediately.
 func (c *Client) CreateCalendar(input CreateCalendarInput) (*Calendar, error) {
+	if input.Source == "" {
+		return nil, fmt.Errorf("calendar: source is required")
+	}
 	jsonBytes, err := marshalCreateCalendarInput(input)
 	if err != nil {
 		return nil, fmt.Errorf("calendar: failed to marshal input: %w", err)

@@ -17,8 +17,8 @@ No AppleScript. No subprocesses. Direct EventKit access via cgo, with an idiomat
 
 ## Features
 
-- **Calendar events** — Full CRUD: list calendars, query events by date range, create, update, delete
-- **Reminders** — Full CRUD: list reminder lists, query/filter reminders, create, update, delete, complete/uncomplete
+- **Calendar events** — Full CRUD: list/create/rename/delete calendars, query events by date range, create, update, delete
+- **Reminders** — Full CRUD: list/create/rename/delete reminder lists, query/filter reminders, create, update, delete, complete/uncomplete
 - **Recurrence rules** — Daily, weekly, monthly, yearly with full constraint support (days of week, days of month, set positions, end date/count)
 - **Structured locations** — Geographic coordinates and geofence radius on events
 - **All accounts** — Sees iCloud, Google, Exchange, subscribed, and local calendars/reminders
@@ -167,6 +167,9 @@ import "github.com/BRO3886/go-eventkit/calendar"
 | `CreateEvent(input) (*Event, error)`                 | Create a new event                |
 | `UpdateEvent(id, input, span) (*Event, error)`       | Update an existing event          |
 | `DeleteEvent(id, span) error`                        | Delete an event                   |
+| `CreateCalendar(input) (*Calendar, error)`           | Create a new calendar             |
+| `UpdateCalendar(id, input) (*Calendar, error)`       | Rename or recolor a calendar      |
+| `DeleteCalendar(id) error`                           | Delete a calendar and its events  |
 
 **Filter options:** `WithCalendar(name)`, `WithCalendarID(id)`, `WithSearch(query)`
 
@@ -178,17 +181,20 @@ import "github.com/BRO3886/go-eventkit/calendar"
 import "github.com/BRO3886/go-eventkit/reminders"
 ```
 
-| Method                                         | Description                         |
-| ---------------------------------------------- | ----------------------------------- |
-| `New() (*Client, error)`                       | Create client, request TCC access   |
-| `Lists() ([]List, error)`                      | List all reminder lists             |
-| `Reminders(...ListOption) ([]Reminder, error)` | Query reminders with filters        |
-| `Reminder(id) (*Reminder, error)`              | Get single reminder by ID or prefix |
-| `CreateReminder(input) (*Reminder, error)`     | Create a new reminder               |
-| `UpdateReminder(id, input) (*Reminder, error)` | Update an existing reminder         |
-| `DeleteReminder(id) error`                     | Delete a reminder                   |
-| `CompleteReminder(id) (*Reminder, error)`      | Mark as completed                   |
-| `UncompleteReminder(id) (*Reminder, error)`    | Mark as incomplete                  |
+| Method                                         | Description                           |
+| ---------------------------------------------- | ------------------------------------- |
+| `New() (*Client, error)`                       | Create client, request TCC access     |
+| `Lists() ([]List, error)`                      | List all reminder lists               |
+| `Reminders(...ListOption) ([]Reminder, error)` | Query reminders with filters          |
+| `Reminder(id) (*Reminder, error)`              | Get single reminder by ID or prefix   |
+| `CreateReminder(input) (*Reminder, error)`     | Create a new reminder                 |
+| `UpdateReminder(id, input) (*Reminder, error)` | Update an existing reminder           |
+| `DeleteReminder(id) error`                     | Delete a reminder                     |
+| `CompleteReminder(id) (*Reminder, error)`      | Mark as completed                     |
+| `UncompleteReminder(id) (*Reminder, error)`    | Mark as incomplete                    |
+| `CreateList(input) (*List, error)`             | Create a new reminder list            |
+| `UpdateList(id, input) (*List, error)`         | Rename or recolor a list              |
+| `DeleteList(id) error`                         | Delete a list and its reminders       |
 
 **Filter options:** `WithList(name)`, `WithListID(id)`, `WithCompleted(bool)`, `WithSearch(query)`, `WithDueBefore(time)`, `WithDueAfter(time)`
 

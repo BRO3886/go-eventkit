@@ -28,6 +28,11 @@ Write a journal entry for today's work session on the `go-eventkit` project.
 ---
 ```
 
+## Post-Journal Housekeeping
+After writing the journal entry, also update:
+- **`CLAUDE.md`** — Update implementation status, coverage numbers, integration test counts, and any new architecture/patterns added during the session.
+- **Auto memory `MEMORY.md`** — Update project status, coverage numbers, and add any new key patterns or architecture decisions discovered during the session.
+
 ## Rules
 - Be specific and technical - this is for future Claude sessions, not humans
 - Include code snippets for non-obvious patterns

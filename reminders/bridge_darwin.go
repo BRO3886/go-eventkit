@@ -161,6 +161,9 @@ func (c *Client) DeleteReminder(id string) error {
 // CreateList creates a new reminder list and returns it with its assigned ID.
 // The list is saved to the EventKit store immediately.
 func (c *Client) CreateList(input CreateListInput) (*List, error) {
+	if input.Source == "" {
+		return nil, fmt.Errorf("reminders: source is required")
+	}
 	jsonStr, err := marshalCreateListInput(input)
 	if err != nil {
 		return nil, err

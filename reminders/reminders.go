@@ -262,12 +262,12 @@ func WithDueAfter(t time.Time) ListOption {
 // CreateListInput contains the fields for creating a new reminder list via
 // [Client.CreateList].
 //
-// Title is required. Source and Color are optional.
+// Title and Source are required. Color is optional.
 type CreateListInput struct {
 	// Title is the display name for the new list (required).
 	Title string
-	// Source is the account name to create the list in (e.g., "iCloud").
-	// If empty, the default source for new reminders is used.
+	// Source is the account name to create the list in (required).
+	// Use [Client.Lists] to discover available source names (e.g., "iCloud").
 	Source string
 	// Color is the list's display color as a hex string (e.g., "#FF6961").
 	// If empty, the system default color is used.

@@ -415,12 +415,13 @@ type UpdateEventInput struct {
 // CreateCalendarInput contains the fields for creating a new calendar via
 // [Client.CreateCalendar].
 //
-// Title is required. Source and Color are optional.
+// Title and Source are required. Color is optional.
 type CreateCalendarInput struct {
 	// Title is the display name for the new calendar (required).
 	Title string
-	// Source is the account name to create the calendar in (e.g., "iCloud").
-	// If empty, the default source for new events is used.
+	// Source is the account name to create the calendar in (required).
+	// Use [Client.Calendars] to discover available source names (e.g., "iCloud",
+	// "siddverma1999@gmail.com"). Not all sources support calendar creation.
 	Source string
 	// Color is the calendar's display color as a hex string (e.g., "#FF6961").
 	// If empty, the system default color is used.

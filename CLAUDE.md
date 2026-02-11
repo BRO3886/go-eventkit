@@ -17,7 +17,7 @@ go-eventkit/
 ├── eventkit.go                  # Shared types: RecurrenceRule, StructuredLocation, Weekday, etc.
 ├── eventkit_test.go             # Tests for shared types and convenience constructors
 ├── calendar/                    # Public: Calendar event bindings (Phase 1 — COMPLETE)
-│   ├── calendar.go              # Go types: Event, Calendar, Client, options
+│   ├── calendar.go              # Go types: Event, Calendar, Client, options, calendar CRUD inputs
 │   ├── parse.go                 # JSON parsing/marshaling (platform-agnostic, no build tags)
 │   ├── bridge_darwin.go         # cgo wrappers (//go:build darwin)
 │   ├── bridge_darwin.m          # ObjC EventKit bridge for EKEvent
@@ -26,7 +26,7 @@ go-eventkit/
 │   ├── calendar_test.go         # Unit tests
 │   └── bridge_mock_test.go      # Mock bridge tests (JSON contract)
 ├── reminders/                   # Public: Reminder bindings (Phase 2 — COMPLETE)
-│   ├── reminders.go             # Go types: Reminder, List, Client, options
+│   ├── reminders.go             # Go types: Reminder, List, Client, options, list CRUD inputs
 │   ├── parse.go                 # JSON parsing/marshaling (platform-agnostic, no build tags)
 │   ├── bridge_darwin.go         # cgo wrappers
 │   ├── bridge_darwin.m          # ObjC EventKit bridge for EKReminder
@@ -35,8 +35,8 @@ go-eventkit/
 │   ├── reminders_test.go        # Unit tests
 │   └── bridge_mock_test.go      # Mock bridge tests (JSON contract)
 ├── scripts/                     # Integration tests (require real EventKit)
-│   ├── integration.go           # 24 calendar integration tests
-│   └── integration_reminders.go # 23 reminder integration tests
+│   ├── integration.go           # 31 calendar integration tests
+│   └── integration_reminders.go # 30 reminder integration tests
 ├── docs/
 │   ├── prd/
 │   │   ├── go-eventkit-prd.md           # Full PRD with API design
@@ -47,14 +47,14 @@ go-eventkit/
 │   └── research/
 │       ├── eventkit-framework-comprehensive.md
 │       └── go-concurrency-cgo-eventkit.md
-├── journals/                    # Engineering journals (7 sessions)
+├── journals/                    # Engineering journals (9 sessions)
 └── go.mod
 ```
 
 ## Implementation Status
 - **Root package** (`eventkit.go`): Shared types — RecurrenceRule, StructuredLocation, Weekday, convenience constructors. Coverage: 100%.
-- **Phase 1**: `calendar/` package — COMPLETE. Full CRUD + recurrence rules + structured locations. Coverage: 66.3%.
-- **Phase 2**: `reminders/` package — COMPLETE. Full CRUD + recurrence rules. Coverage: 60.4%.
+- **Phase 1**: `calendar/` package — COMPLETE. Full event CRUD + calendar container CRUD + recurrence rules + structured locations. Coverage: 56.7%.
+- **Phase 2**: `reminders/` package — COMPLETE. Full reminder CRUD + list container CRUD + recurrence rules. Coverage: 54.9%.
 - **Phase 3**: Future frameworks (Contacts, etc.) — out of scope for now
 - **Deferred**: Concurrency improvements — see `docs/prd/concurrency-prd.md`
 - **Deferred**: Performance benchmarking — see `docs/prd/benchmarking-prd.md`
@@ -64,6 +64,8 @@ go-eventkit/
 - `dispatch_once` for EKEventStore singleton + TCC access request — **each package has its own singleton** (C objects can't cross cgo package boundaries)
 - `dispatch_semaphore` for sync wrappers around async EventKit APIs (reminders fetch is async; calendar fetch is synchronous)
 - Calendar writes via EventKit directly (`saveEvent:span:commit:`) — no AppleScript needed
+- Calendar/list container CRUD via `saveCalendar:commit:` / `removeCalendar:commit:` — color via `CGColorCreateGenericRGB()`, source is **required** (no default fallback), immutability check via `cal.isImmutable`
+- `find_source_by_name` is entity-aware — prefers sources with matching entity type calendars (macOS has duplicate "iCloud" EKSource objects for events vs reminders)
 - All reminder writes via EventKit (improvement over `rem` which used AppleScript for writes)
 - TCC: `requestFullAccessToEventsWithCompletion:` (macOS 14+), fallback to `requestAccessToEntityType:`
 - Events require date ranges for queries (can't fetch all unbounded)
@@ -90,10 +92,10 @@ go-eventkit/
 go build ./...              # Compiles ObjC via cgo automatically
 go test ./...               # Unit tests (JSON parsing, types)
 GOOS=linux CGO_ENABLED=0 go build ./...  # Verify cross-platform stubs
-go run ./scripts/integration.go              # Calendar integration tests (17 tests)
-go run ./scripts/integration_reminders.go    # Reminder integration tests (19 tests)
+go run ./scripts/integration.go              # Calendar integration tests (31 tests)
+go run ./scripts/integration_reminders.go    # Reminder integration tests (30 tests)
 ```
-Test coverage ceiling is ~58-59% because cgo bridge functions (bridge_darwin.go) can't be reached by `go test`. All testable code (types, parsing, marshaling) achieves ~100% coverage.
+Test coverage ceiling is ~55-57% because cgo bridge functions (bridge_darwin.go) can't be reached by `go test`. All testable code (types, parsing, marshaling) achieves ~100% coverage.
 
 ## Downstream Consumer
 - `cal` CLI (separate repo) will be the first consumer of `calendar/` package

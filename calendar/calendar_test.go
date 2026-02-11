@@ -1941,8 +1941,8 @@ func TestMarshalCreateCalendarInput(t *testing.T) {
 		}
 	})
 
-	t.Run("minimal input omits optional fields", func(t *testing.T) {
-		input := CreateCalendarInput{Title: "Work"}
+	t.Run("minimal input omits color when empty", func(t *testing.T) {
+		input := CreateCalendarInput{Title: "Work", Source: "iCloud"}
 		data, err := marshalCreateCalendarInput(input)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -1953,8 +1953,8 @@ func TestMarshalCreateCalendarInput(t *testing.T) {
 		if result["title"] != "Work" {
 			t.Errorf("title = %v", result["title"])
 		}
-		if _, ok := result["source"]; ok {
-			t.Error("source should be omitted when empty")
+		if result["source"] != "iCloud" {
+			t.Errorf("source = %v", result["source"])
 		}
 		if _, ok := result["color"]; ok {
 			t.Error("color should be omitted when empty")

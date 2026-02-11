@@ -806,8 +806,8 @@ func TestMarshalCreateListInput(t *testing.T) {
 		}
 	})
 
-	t.Run("minimal input omits optional fields", func(t *testing.T) {
-		input := CreateListInput{Title: "Work"}
+	t.Run("minimal input omits color when empty", func(t *testing.T) {
+		input := CreateListInput{Title: "Work", Source: "iCloud"}
 		jsonStr, err := marshalCreateListInput(input)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -818,8 +818,8 @@ func TestMarshalCreateListInput(t *testing.T) {
 		if m["title"] != "Work" {
 			t.Errorf("title = %v", m["title"])
 		}
-		if _, ok := m["source"]; ok {
-			t.Error("source should be omitted when empty")
+		if m["source"] != "iCloud" {
+			t.Errorf("source = %v", m["source"])
 		}
 		if _, ok := m["color"]; ok {
 			t.Error("color should be omitted when empty")

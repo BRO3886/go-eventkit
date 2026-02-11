@@ -383,9 +383,18 @@ func main() {
 	}
 
 	// --- Test 24: Create reminder list ---
+	// Discover a writable source from existing lists.
+	var writableSource string
+	for _, l := range lists {
+		if !l.ReadOnly && l.Source != "" {
+			writableSource = l.Source
+			break
+		}
+	}
 	testList, err := client.CreateList(reminders.CreateListInput{
-		Title: "[go-eventkit test] Integration List",
-		Color: "#FF6961",
+		Title:  "[go-eventkit test] Integration List",
+		Color:  "#FF6961",
+		Source: writableSource,
 	})
 	check("Create reminder list", err)
 

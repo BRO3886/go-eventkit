@@ -470,9 +470,18 @@ func main() {
 	}
 
 	// --- Test 25: Create calendar ---
+	// Discover a writable source from existing calendars.
+	var writableSource string
+	for _, c := range calendars {
+		if !c.ReadOnly && c.Source != "" {
+			writableSource = c.Source
+			break
+		}
+	}
 	testCal, err := client.CreateCalendar(calendar.CreateCalendarInput{
-		Title: "[go-eventkit test] Integration Cal",
-		Color: "#FF6961",
+		Title:  "[go-eventkit test] Integration Cal",
+		Color:  "#FF6961",
+		Source: writableSource,
 	})
 	check("Create calendar", err)
 

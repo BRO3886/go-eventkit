@@ -854,12 +854,21 @@ char* ek_cal_update_event(const char* event_id, const char* json_input, int span
 
 static EKSource* find_source_by_name(EKEventStore* store, NSString* name) {
     NSString* lowerName = [name lowercaseString];
+    // Multiple sources can share the same title (e.g., "iCloud" for events
+    // and "iCloud" for reminders). Prefer the one that has event calendars.
+    EKSource* fallback = nil;
     for (EKSource* source in store.sources) {
         if ([[source.title lowercaseString] isEqualToString:lowerName]) {
-            return source;
+            NSSet* eventCals = [source calendarsForEntityType:EKEntityTypeEvent];
+            if (eventCals.count > 0) {
+                return source;
+            }
+            if (!fallback) {
+                fallback = source;
+            }
         }
     }
-    return nil;
+    return fallback;
 }
 
 // --- Parse hex color string to CGColorRef ---
@@ -911,21 +920,13 @@ char* ek_cal_create_calendar(const char* json_input) {
         // Title (required).
         cal.title = input[@"title"] ?: @"";
 
-        // Source.
-        if (input[@"source"] && input[@"source"] != [NSNull null] && [input[@"source"] length] > 0) {
-            EKSource* source = find_source_by_name(store, input[@"source"]);
-            if (!source) {
-                cal_set_error([NSString stringWithFormat:@"source not found: %@", input[@"source"]]);
-                return NULL;
-            }
-            cal.source = source;
-        } else {
-            // Use the default calendar's source.
-            EKCalendar* defaultCal = [store defaultCalendarForNewEvents];
-            if (defaultCal && defaultCal.source) {
-                cal.source = defaultCal.source;
-            }
+        // Source (required — validated in Go layer).
+        EKSource* source = find_source_by_name(store, input[@"source"]);
+        if (!source) {
+            cal_set_error([NSString stringWithFormat:@"source not found: %@", input[@"source"]]);
+            return NULL;
         }
+        cal.source = source;
 
         // Color.
         if (input[@"color"] && input[@"color"] != [NSNull null] && [input[@"color"] length] > 0) {
