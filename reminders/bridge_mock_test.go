@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/BRO3886/go-eventkit"
 )
 
 // These tests use a mock bridge layer to test the JSON round-trip,
@@ -24,8 +26,39 @@ func simulateRemindersResponse(reminders []Reminder) string {
 			Priority:  int(r.Priority),
 			Completed: r.Completed,
 			Flagged:   r.Flagged,
+			Recurring: r.Recurring,
 			HasAlarms: r.HasAlarms,
 			Alarms:    []rawAlarm{},
+		}
+
+		// Convert recurrence rules to raw format.
+		for _, rule := range r.RecurrenceRules {
+			rawRule := rawRecurrenceRule{
+				Frequency:       int(rule.Frequency),
+				Interval:        rule.Interval,
+				DaysOfTheMonth:  rule.DaysOfTheMonth,
+				MonthsOfTheYear: rule.MonthsOfTheYear,
+				WeeksOfTheYear:  rule.WeeksOfTheYear,
+				DaysOfTheYear:   rule.DaysOfTheYear,
+				SetPositions:    rule.SetPositions,
+			}
+			for _, dow := range rule.DaysOfTheWeek {
+				rawRule.DaysOfTheWeek = append(rawRule.DaysOfTheWeek, rawRecurrenceDayOfWeek{
+					DayOfTheWeek: int(dow.DayOfTheWeek),
+					WeekNumber:   dow.WeekNumber,
+				})
+			}
+			if rule.End != nil {
+				rawEnd := &rawRecurrenceEnd{
+					OccurrenceCount: rule.End.OccurrenceCount,
+				}
+				if rule.End.EndDate != nil {
+					s := rule.End.EndDate.UTC().Format("2006-01-02T15:04:05.000Z")
+					rawEnd.EndDate = &s
+				}
+				rawRule.End = rawEnd
+			}
+			rr.RecurrenceRules = append(rr.RecurrenceRules, rawRule)
 		}
 
 		if r.Notes != "" {
@@ -552,6 +585,221 @@ func TestMockEdgeCases(t *testing.T) {
 			if s == "" {
 				t.Errorf("Priority(%d).String() returned empty", prio)
 			}
+		}
+	})
+}
+
+func TestMockRecurrenceRoundtrip(t *testing.T) {
+	endDate := time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC)
+
+	input := []Reminder{
+		{
+			ID:        "rec-daily",
+			Title:     "Daily standup",
+			List:      "Work",
+			ListID:    "list-1",
+			Recurring: true,
+			RecurrenceRules: []eventkit.RecurrenceRule{
+				eventkit.Daily(1).Count(30),
+			},
+			Alarms: []Alarm{},
+		},
+		{
+			ID:        "rec-weekly",
+			Title:     "Weekly review",
+			List:      "Work",
+			ListID:    "list-1",
+			Recurring: true,
+			RecurrenceRules: []eventkit.RecurrenceRule{
+				eventkit.Weekly(2, eventkit.Monday, eventkit.Friday).Until(endDate),
+			},
+			Alarms: []Alarm{},
+		},
+		{
+			ID:        "rec-monthly",
+			Title:     "Pay rent",
+			List:      "Bills",
+			ListID:    "list-2",
+			Recurring: true,
+			RecurrenceRules: []eventkit.RecurrenceRule{
+				eventkit.Monthly(1, 1),
+			},
+			Alarms: []Alarm{},
+		},
+		{
+			ID:     "no-rec",
+			Title:  "One-time task",
+			List:   "Inbox",
+			ListID: "list-3",
+			Alarms: []Alarm{},
+		},
+	}
+
+	jsonStr := simulateRemindersResponse(input)
+	parsed, err := parseRemindersJSON(jsonStr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(parsed) != 4 {
+		t.Fatalf("parsed %d reminders, want 4", len(parsed))
+	}
+
+	// Daily with count.
+	r0 := parsed[0]
+	if !r0.Recurring {
+		t.Error("r0 should be recurring")
+	}
+	if len(r0.RecurrenceRules) != 1 {
+		t.Fatalf("r0 rules = %d, want 1", len(r0.RecurrenceRules))
+	}
+	if r0.RecurrenceRules[0].Frequency != eventkit.FrequencyDaily {
+		t.Errorf("r0 frequency = %d, want daily", r0.RecurrenceRules[0].Frequency)
+	}
+	if r0.RecurrenceRules[0].Interval != 1 {
+		t.Errorf("r0 interval = %d, want 1", r0.RecurrenceRules[0].Interval)
+	}
+	if r0.RecurrenceRules[0].End == nil || r0.RecurrenceRules[0].End.OccurrenceCount != 30 {
+		t.Errorf("r0 end = %+v, want count=30", r0.RecurrenceRules[0].End)
+	}
+
+	// Weekly with days and end date.
+	r1 := parsed[1]
+	if !r1.Recurring {
+		t.Error("r1 should be recurring")
+	}
+	if len(r1.RecurrenceRules) != 1 {
+		t.Fatalf("r1 rules = %d, want 1", len(r1.RecurrenceRules))
+	}
+	rule := r1.RecurrenceRules[0]
+	if rule.Frequency != eventkit.FrequencyWeekly {
+		t.Errorf("r1 frequency = %d, want weekly", rule.Frequency)
+	}
+	if rule.Interval != 2 {
+		t.Errorf("r1 interval = %d, want 2", rule.Interval)
+	}
+	if len(rule.DaysOfTheWeek) != 2 {
+		t.Fatalf("r1 days = %d, want 2", len(rule.DaysOfTheWeek))
+	}
+	if rule.DaysOfTheWeek[0].DayOfTheWeek != eventkit.Monday {
+		t.Errorf("r1 day[0] = %d, want Monday", rule.DaysOfTheWeek[0].DayOfTheWeek)
+	}
+	if rule.DaysOfTheWeek[1].DayOfTheWeek != eventkit.Friday {
+		t.Errorf("r1 day[1] = %d, want Friday", rule.DaysOfTheWeek[1].DayOfTheWeek)
+	}
+	if rule.End == nil || rule.End.EndDate == nil || !rule.End.EndDate.Equal(endDate) {
+		t.Errorf("r1 end date mismatch: %+v", rule.End)
+	}
+
+	// Monthly with day of month.
+	r2 := parsed[2]
+	if !r2.Recurring {
+		t.Error("r2 should be recurring")
+	}
+	if len(r2.RecurrenceRules[0].DaysOfTheMonth) != 1 || r2.RecurrenceRules[0].DaysOfTheMonth[0] != 1 {
+		t.Errorf("r2 daysOfMonth = %v, want [1]", r2.RecurrenceRules[0].DaysOfTheMonth)
+	}
+
+	// Non-recurring.
+	r3 := parsed[3]
+	if r3.Recurring {
+		t.Error("r3 should not be recurring")
+	}
+	if len(r3.RecurrenceRules) != 0 {
+		t.Errorf("r3 rules = %d, want 0", len(r3.RecurrenceRules))
+	}
+}
+
+func TestMockCreateReminderWithRecurrence(t *testing.T) {
+	input := CreateReminderInput{
+		Title:    "Daily review",
+		ListName: "Work",
+		RecurrenceRules: []eventkit.RecurrenceRule{
+			eventkit.Daily(1).Count(5),
+		},
+	}
+
+	jsonStr, err := marshalCreateInput(input)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var parsed map[string]any
+	json.Unmarshal([]byte(jsonStr), &parsed)
+
+	rules, ok := parsed["recurrenceRules"].([]any)
+	if !ok {
+		t.Fatal("recurrenceRules not present or wrong type")
+	}
+	if len(rules) != 1 {
+		t.Fatalf("rules = %d, want 1", len(rules))
+	}
+
+	rule := rules[0].(map[string]any)
+	if rule["frequency"] != float64(0) {
+		t.Errorf("frequency = %v, want 0 (daily)", rule["frequency"])
+	}
+	if rule["interval"] != float64(1) {
+		t.Errorf("interval = %v, want 1", rule["interval"])
+	}
+	end := rule["end"].(map[string]any)
+	if end["occurrenceCount"] != float64(5) {
+		t.Errorf("occurrenceCount = %v, want 5", end["occurrenceCount"])
+	}
+}
+
+func TestMockUpdateReminderWithRecurrence(t *testing.T) {
+	t.Run("add recurrence rules", func(t *testing.T) {
+		rules := []eventkit.RecurrenceRule{
+			eventkit.Weekly(1, eventkit.Monday, eventkit.Wednesday),
+		}
+		data, err := marshalUpdateInput(UpdateReminderInput{
+			RecurrenceRules: &rules,
+		})
+		if err != nil {
+			t.Fatalf("marshal error: %v", err)
+		}
+
+		var m map[string]any
+		json.Unmarshal([]byte(data), &m)
+
+		rr := m["recurrenceRules"].([]any)
+		if len(rr) != 1 {
+			t.Fatalf("rules = %d, want 1", len(rr))
+		}
+		rule := rr[0].(map[string]any)
+		if rule["frequency"] != float64(1) {
+			t.Errorf("frequency = %v, want 1 (weekly)", rule["frequency"])
+		}
+		days := rule["daysOfTheWeek"].([]any)
+		if len(days) != 2 {
+			t.Fatalf("days = %d, want 2", len(days))
+		}
+	})
+
+	t.Run("remove recurrence rules", func(t *testing.T) {
+		empty := []eventkit.RecurrenceRule{}
+		data, _ := marshalUpdateInput(UpdateReminderInput{
+			RecurrenceRules: &empty,
+		})
+
+		var m map[string]any
+		json.Unmarshal([]byte(data), &m)
+
+		rr := m["recurrenceRules"].([]any)
+		if len(rr) != 0 {
+			t.Errorf("rules = %d, want 0", len(rr))
+		}
+	})
+
+	t.Run("nil leaves recurrence unchanged", func(t *testing.T) {
+		data, _ := marshalUpdateInput(UpdateReminderInput{})
+
+		var m map[string]any
+		json.Unmarshal([]byte(data), &m)
+
+		if _, ok := m["recurrenceRules"]; ok {
+			t.Error("recurrenceRules should NOT be in update when nil")
 		}
 	})
 }

@@ -12,6 +12,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/BRO3886/go-eventkit"
 	"github.com/BRO3886/go-eventkit/reminders"
 )
 
@@ -294,9 +295,96 @@ func main() {
 		failed++
 	}
 
+	// --- Test 20: Create reminder with daily recurrence ---
+	recDailyReminder, err := client.CreateReminder(reminders.CreateReminderInput{
+		Title:    "[go-eventkit test] Daily Recurring",
+		ListName: defaultList,
+		DueDate:  &dueDate,
+		Notes:    "Created by go-eventkit integration test. Safe to delete.",
+		RecurrenceRules: []eventkit.RecurrenceRule{
+			eventkit.Daily(1).Count(5),
+		},
+	})
+	check("Create reminder with daily recurrence", err)
+
+	var recDailyID string
+	if err == nil {
+		recDailyID = recDailyReminder.ID
+		log.Printf("  Created recurring reminder: %q, Recurring=%v, Rules=%d",
+			recDailyReminder.Title, recDailyReminder.Recurring, len(recDailyReminder.RecurrenceRules))
+		if !recDailyReminder.Recurring {
+			log.Printf("  FAIL: Expected recurring=true")
+			failed++
+		} else {
+			passed++
+		}
+		if len(recDailyReminder.RecurrenceRules) != 1 {
+			log.Printf("  FAIL: Expected 1 recurrence rule, got %d", len(recDailyReminder.RecurrenceRules))
+		} else if recDailyReminder.RecurrenceRules[0].Frequency != eventkit.FrequencyDaily {
+			log.Printf("  FAIL: Expected daily frequency, got %d", recDailyReminder.RecurrenceRules[0].Frequency)
+		}
+	}
+
+	// --- Test 21: Create reminder with weekly recurrence ---
+	endDate := time.Now().Add(90 * 24 * time.Hour)
+	recWeeklyReminder, err := client.CreateReminder(reminders.CreateReminderInput{
+		Title:    "[go-eventkit test] Weekly Recurring",
+		ListName: defaultList,
+		DueDate:  &dueDate,
+		Notes:    "Created by go-eventkit integration test. Safe to delete.",
+		RecurrenceRules: []eventkit.RecurrenceRule{
+			eventkit.Weekly(2, eventkit.Monday, eventkit.Friday).Until(endDate),
+		},
+	})
+	check("Create reminder with weekly recurrence", err)
+
+	var recWeeklyID string
+	if err == nil {
+		recWeeklyID = recWeeklyReminder.ID
+		log.Printf("  Created weekly recurring reminder: %q", recWeeklyReminder.Title)
+		if len(recWeeklyReminder.RecurrenceRules) == 1 {
+			rule := recWeeklyReminder.RecurrenceRules[0]
+			if rule.Frequency != eventkit.FrequencyWeekly {
+				log.Printf("  FAIL: Expected weekly frequency")
+				failed++
+			} else {
+				passed++
+			}
+			if rule.Interval != 2 {
+				log.Printf("  FAIL: Expected interval=2, got %d", rule.Interval)
+			}
+		}
+	}
+
+	// --- Test 22: Update reminder to add recurrence ---
+	if createdID != "" {
+		addRules := []eventkit.RecurrenceRule{eventkit.Daily(1).Count(3)}
+		updatedRec, err := client.UpdateReminder(createdID, reminders.UpdateReminderInput{
+			RecurrenceRules: &addRules,
+		})
+		check("Update reminder: add recurrence rule", err)
+		if err == nil {
+			log.Printf("  Updated reminder with recurrence: Recurring=%v, Rules=%d",
+				updatedRec.Recurring, len(updatedRec.RecurrenceRules))
+		}
+	}
+
+	// --- Test 23: Update reminder to remove recurrence ---
+	if createdID != "" {
+		emptyRules := []eventkit.RecurrenceRule{}
+		updatedNoRec, err := client.UpdateReminder(createdID, reminders.UpdateReminderInput{
+			RecurrenceRules: &emptyRules,
+		})
+		check("Update reminder: remove recurrence rules", err)
+		if err == nil {
+			log.Printf("  Removed recurrence: Recurring=%v, Rules=%d",
+				updatedNoRec.Recurring, len(updatedNoRec.RecurrenceRules))
+		}
+	}
+
 	// --- Cleanup: Delete all test reminders ---
 	log.Println("\n--- Cleanup ---")
-	cleanupIDs := []string{createdID, alarmReminderID, urlReminderID, relAlarmID}
+	cleanupIDs := []string{createdID, alarmReminderID, urlReminderID, relAlarmID, recDailyID, recWeeklyID}
 	for _, id := range cleanupIDs {
 		if id == "" {
 			continue
