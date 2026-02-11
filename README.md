@@ -5,6 +5,8 @@ Go bindings for Apple's EventKit framework. In-process, sub-200ms access to macO
 ## Features
 
 - **Calendar events** — Full CRUD: list calendars, query events by date range, create, update, delete
+- **Recurrence rules** — Read and write recurring events (daily, weekly, monthly, yearly) with full constraint support (days of week, days of month, set positions, end date/count)
+- **Structured locations** — Geographic coordinates (lat/long) and geofence radius on events, beyond plain-text location strings
 - **Reminders** — Full CRUD: list reminder lists, query/filter reminders, create, update, delete, complete/uncomplete
 - **Pure Go API** — Idiomatic Go types, no cgo leaking to consumers
 - **Fast** — Direct EventKit access via cgo + Objective-C, 100-500x faster than AppleScript/JXA
@@ -67,6 +69,25 @@ func main() {
         Alerts:    []calendar.Alert{{RelativeOffset: -15 * time.Minute}},
     })
     fmt.Printf("Created: %s (ID: %s)\n", event.Title, event.ID)
+
+    // Create a recurring event with a structured location
+    event, _ = client.CreateEvent(calendar.CreateEventInput{
+        Title:     "Weekly sync",
+        StartDate: time.Date(2026, 2, 12, 14, 0, 0, 0, time.Local),
+        EndDate:   time.Date(2026, 2, 12, 15, 0, 0, 0, time.Local),
+        Calendar:  "Work",
+        RecurrenceRules: []calendar.RecurrenceRule{
+            calendar.Weekly(1, calendar.Monday, calendar.Wednesday, calendar.Friday).
+                Until(time.Date(2026, 12, 31, 0, 0, 0, 0, time.Local)),
+        },
+        StructuredLocation: &calendar.StructuredLocation{
+            Title:     "Apple Park",
+            Latitude:  37.3349,
+            Longitude: -122.0090,
+            Radius:    150,
+        },
+    })
+    fmt.Printf("Created recurring: %s (rules: %d)\n", event.Title, len(event.RecurrenceRules))
 }
 ```
 
@@ -139,6 +160,8 @@ import "github.com/BRO3886/go-eventkit/calendar"
 
 **Filter options:** `WithCalendar(name)`, `WithCalendarID(id)`, `WithSearch(query)`
 
+**Recurrence constructors:** `Daily(interval)`, `Weekly(interval, ...days)`, `Monthly(interval, ...daysOfMonth)`, `Yearly(interval)` — chain with `.Until(time)` or `.Count(n)`
+
 ### Reminders Package
 
 ```go
@@ -207,6 +230,9 @@ These are Apple EventKit limitations, not bugs:
 - **Reminders use async fetch** — Wrapped synchronously via `dispatch_semaphore`
 - **Birthday/subscription calendars are read-only**
 - **No text search on events** — Only date-range predicates (search is post-fetch filtering)
+- **Recurrence: daily/weekly/monthly/yearly only** — EventKit does not support hourly or minutely frequencies
+- **Recurrence is a subset of RFC 5545** — Not all iCalendar RRULE patterns are expressible via EventKit
+- **Some CalDAV servers may simplify rules** — Constraint fields like `setPositions` may not survive sync
 
 ## Building & Testing
 
@@ -218,8 +244,8 @@ go build ./...
 go test ./...
 
 # Integration tests (requires TCC calendar/reminders access)
-go run -tags integration ./scripts/integration.go
-go run -tags integration ./scripts/integration_reminders.go
+go run ./scripts/integration.go
+go run ./scripts/integration_reminders.go
 
 # Cross-platform stub verification
 GOOS=linux CGO_ENABLED=0 go build ./...
