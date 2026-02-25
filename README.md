@@ -21,6 +21,7 @@ No AppleScript. No subprocesses. Direct EventKit access via cgo, with an idiomat
 - **Reminders** — Full CRUD: list/create/rename/delete reminder lists, query/filter reminders, create, update, delete, complete/uncomplete
 - **Recurrence rules** — Daily, weekly, monthly, yearly with full constraint support (days of week, days of month, set positions, end date/count)
 - **Structured locations** — Geographic coordinates and geofence radius on events
+- **Change notifications** — `WatchChanges(ctx)` delivers a signal on any EventKit database change (iCloud sync, other apps, own writes) via a Go channel
 - **All accounts** — Sees iCloud, Google, Exchange, subscribed, and local calendars/reminders
 - **Pure Go API** — Idiomatic types, no cgo leaking to consumers
 - **Cross-platform safe** — Types importable everywhere, bridge returns `ErrUnsupported` on non-darwin
@@ -150,6 +151,36 @@ func main() {
 }
 ```
 
+### Change Notifications
+
+```go
+ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+defer cancel()
+
+// Calendar changes
+changes, err := client.WatchChanges(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+for range changes {
+    events, _ := client.Events(start, end)
+    render(events) // re-fetch on every signal
+}
+```
+
+```go
+// Reminders changes
+changes, err := remClient.WatchChanges(ctx)
+for range changes {
+    items, _ := remClient.Reminders(reminders.WithCompleted(false))
+    render(items)
+}
+```
+
+The channel is buffered (cap 16) and excess signals are coalesced — consumers always re-fetch. The channel closes when `ctx` is cancelled or the pipe fails. Only one watcher may be active per package at a time.
+
+> **Cross-process note**: If your consumer and producer are separate binaries, the consumer must pump the main CFRunLoop to receive cross-process `EKEventStoreChangedNotification`. See [`scripts/watch-demo/consumer`](scripts/watch-demo/consumer/main.go) for the `runtime.LockOSThread()` + `CFRunLoopRunInMode` pattern. Single-binary use (same process writes and watches) works without any run loop setup.
+
 ## API Reference
 
 ### Calendar Package
@@ -170,6 +201,7 @@ import "github.com/BRO3886/go-eventkit/calendar"
 | `CreateCalendar(input) (*Calendar, error)`           | Create a new calendar             |
 | `UpdateCalendar(id, input) (*Calendar, error)`       | Rename or recolor a calendar      |
 | `DeleteCalendar(id) error`                           | Delete a calendar and its events  |
+| `WatchChanges(ctx) (<-chan struct{}, error)`          | Subscribe to database changes     |
 
 **Filter options:** `WithCalendar(name)`, `WithCalendarID(id)`, `WithSearch(query)`
 
@@ -195,6 +227,7 @@ import "github.com/BRO3886/go-eventkit/reminders"
 | `CreateList(input) (*List, error)`             | Create a new reminder list            |
 | `UpdateList(id, input) (*List, error)`         | Rename or recolor a list              |
 | `DeleteList(id) error`                         | Delete a list and its reminders       |
+| `WatchChanges(ctx) (<-chan struct{}, error)`    | Subscribe to database changes         |
 
 **Filter options:** `WithList(name)`, `WithListID(id)`, `WithCompleted(bool)`, `WithSearch(query)`, `WithDueBefore(time)`, `WithDueAfter(time)`
 

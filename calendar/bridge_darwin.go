@@ -10,11 +10,18 @@ package calendar
 */
 import "C"
 import (
+	"context"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 )
+
+var calWatchMu sync.Mutex
+var calWatchActive bool
 
 // New creates a new Calendar [Client] and requests calendar access.
 //
@@ -266,6 +273,62 @@ func (c *Client) DeleteCalendar(id string) error {
 	}
 	defer C.ek_cal_free(cstr)
 	return nil
+}
+
+// WatchChanges returns a channel that receives a value whenever the
+// EventKit calendar database changes. Changes include writes by this
+// process (CreateEvent, UpdateEvent, DeleteEvent, CreateCalendar, etc.),
+// iCloud sync, Calendar.app edits, Exchange push, and changes by other
+// apps with calendar access.
+//
+// The channel is closed when ctx is cancelled or an internal read error
+// occurs. After ctx cancellation, any pending signals already in the
+// channel buffer are still readable.
+//
+// The channel carries no information about what specifically changed.
+// Callers should re-fetch the data they care about after each signal.
+// The channel is buffered (capacity 16); if the consumer falls behind,
+// excess signals are dropped rather than blocking — this is safe because
+// callers re-fetch anyway.
+//
+// Only one watcher may be active per process. A second call to
+// WatchChanges while the first is active returns an error.
+//
+// Returns [ErrUnsupported] on non-darwin platforms.
+func (c *Client) WatchChanges(ctx context.Context) (<-chan struct{}, error) {
+	calWatchMu.Lock()
+	if calWatchActive {
+		calWatchMu.Unlock()
+		return nil, errors.New("calendar: watcher already active")
+	}
+	if C.ek_cal_watch_start() == 0 {
+		calWatchMu.Unlock()
+		return nil, errors.New("calendar: failed to start watcher")
+	}
+	calWatchActive = true
+	calWatchMu.Unlock()
+
+	fd := int(C.ek_cal_watch_read_fd())
+	f := os.NewFile(uintptr(fd), "ek-cal-watch-pipe")
+
+	ch := make(chan struct{}, 16)
+	go func() {
+		defer func() {
+			C.ek_cal_watch_stop()
+			calWatchMu.Lock()
+			calWatchActive = false
+			calWatchMu.Unlock()
+			close(ch)
+		}()
+		inner := watchChangesFromFile(ctx, f)
+		for range inner {
+			select {
+			case ch <- struct{}{}:
+			default:
+			}
+		}
+	}()
+	return ch, nil
 }
 
 // getLastError reads the last error from the ObjC bridge.

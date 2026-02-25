@@ -7,6 +7,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -518,6 +519,128 @@ func main() {
 		} else {
 			log.Printf("FAIL: Deleted reminder still accessible")
 			failed++
+		}
+	}
+
+	// --- Test 31: WatchChanges — signal on reminder write ---
+	log.Println("\n--- Test 31: WatchChanges signal on reminder write ---")
+	{
+		ctx31, cancel31 := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel31()
+		changes31, err := client.WatchChanges(ctx31)
+		check("WatchChanges start", err)
+		if err == nil {
+			// Create a reminder to trigger notification.
+			rem31, cerr := client.CreateReminder(reminders.CreateReminderInput{
+				Title: "WatchChanges test reminder",
+			})
+			if cerr != nil {
+				log.Printf("WARN: CreateReminder for watch test: %v", cerr)
+			} else {
+				defer client.DeleteReminder(rem31.ID)
+			}
+			select {
+			case _, ok := <-changes31:
+				if ok {
+					log.Printf("  Received change signal (expected)")
+				} else {
+					log.Printf("  FAIL: channel closed before signal")
+					failed++
+					passed--
+				}
+			case <-ctx31.Done():
+				log.Printf("  FAIL: timeout waiting for change signal")
+				failed++
+				passed--
+			}
+			cancel31()
+		}
+	}
+
+	// --- Test 32: WatchChanges — channel closes on ctx cancel ---
+	log.Println("\n--- Test 32: WatchChanges channel closes on ctx cancel ---")
+	{
+		ctx32, cancel32 := context.WithCancel(context.Background())
+		changes32, err := client.WatchChanges(ctx32)
+		check("WatchChanges start for cancel test", err)
+		if err == nil {
+			cancel32()
+			select {
+			case <-changes32:
+			case <-time.After(2 * time.Second):
+			}
+			select {
+			case _, ok := <-changes32:
+				if !ok {
+					log.Printf("  Channel closed after cancel (expected)")
+				} else {
+					select {
+					case _, ok2 := <-changes32:
+						if !ok2 {
+							log.Printf("  Channel closed after draining (expected)")
+						} else {
+							log.Printf("  FAIL: channel still open after cancel")
+							failed++
+							passed--
+						}
+					case <-time.After(2 * time.Second):
+						log.Printf("  FAIL: timeout waiting for channel close")
+						failed++
+						passed--
+					}
+				}
+			case <-time.After(2 * time.Second):
+				log.Printf("  FAIL: timeout waiting for channel close after cancel")
+				failed++
+				passed--
+			}
+		}
+	}
+
+	// --- Test 33: WatchChanges — double call returns error ---
+	log.Println("\n--- Test 33: WatchChanges double call returns error ---")
+	{
+		ctx33a, cancel33a := context.WithCancel(context.Background())
+		defer cancel33a()
+		changes33, err := client.WatchChanges(ctx33a)
+		check("WatchChanges first call", err)
+		if err == nil {
+			_, err2 := client.WatchChanges(context.Background())
+			if err2 != nil {
+				log.Printf("  Second call returned error (expected): %v", err2)
+			} else {
+				log.Printf("  FAIL: second call should have returned error")
+				failed++
+				passed--
+			}
+			cancel33a()
+			for range changes33 {
+			}
+		}
+	}
+
+	// --- Test 34: WatchChanges — restart after first watcher stopped ---
+	log.Println("\n--- Test 34: WatchChanges restart after stop ---")
+	{
+		ctx34a, cancel34a := context.WithCancel(context.Background())
+		changes34a, err := client.WatchChanges(ctx34a)
+		check("WatchChanges first call for restart test", err)
+		if err == nil {
+			cancel34a()
+			for range changes34a {
+			}
+
+			ctx34b, cancel34b := context.WithCancel(context.Background())
+			defer cancel34b()
+			_, err2 := client.WatchChanges(ctx34b)
+			if err2 != nil {
+				log.Printf("  FAIL: restart failed: %v", err2)
+				failed++
+				passed--
+			} else {
+				log.Printf("  Restart succeeded (expected)")
+				cancel34b()
+			}
 		}
 	}
 

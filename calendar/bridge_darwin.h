@@ -61,4 +61,14 @@ void ek_cal_free(char* ptr);
 // ek_cal_last_error returns the last error message, or NULL if no error.
 const char* ek_cal_last_error(void);
 
+// ek_cal_watch_start registers EKEventStoreChangedNotification observer and
+// creates a pipe. Returns 1 on success, 0 on failure.
+int ek_cal_watch_start(void);
+
+// ek_cal_watch_read_fd returns the read end of the notification pipe, or -1.
+int ek_cal_watch_read_fd(void);
+
+// ek_cal_watch_stop removes the observer and closes the pipe.
+void ek_cal_watch_stop(void);
+
 #endif
