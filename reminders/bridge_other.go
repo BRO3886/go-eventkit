@@ -2,6 +2,8 @@
 
 package reminders
 
+import "context"
+
 // New creates a new Reminders [Client] and requests reminders access.
 //
 // On non-darwin platforms, this always returns [ErrUnsupported].
@@ -57,5 +59,13 @@ func (c *Client) CompleteReminder(id string) (*Reminder, error) {
 
 // UncompleteReminder marks a reminder as incomplete and returns the updated version.
 func (c *Client) UncompleteReminder(id string) (*Reminder, error) {
+	return nil, ErrUnsupported
+}
+
+// WatchChanges returns a channel that receives a value whenever the
+// EventKit reminders database changes.
+//
+// Returns [ErrUnsupported] on non-darwin platforms.
+func (c *Client) WatchChanges(ctx context.Context) (<-chan struct{}, error) {
 	return nil, ErrUnsupported
 }

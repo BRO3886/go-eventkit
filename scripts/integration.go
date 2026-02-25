@@ -7,6 +7,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -607,6 +608,136 @@ func main() {
 		} else {
 			log.Printf("FAIL: Deleted event still accessible")
 			failed++
+		}
+	}
+
+	// --- Test 32: WatchChanges — signal on event write ---
+	log.Println("\n--- Test 32: WatchChanges signal on event write ---")
+	{
+		ctx32, cancel32 := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel32()
+		changes32, err := client.WatchChanges(ctx32)
+		check("WatchChanges start", err)
+		if err == nil {
+			// Create an event to trigger notification.
+			start32 := time.Now().Add(24 * time.Hour).Truncate(time.Hour)
+			ev32, cerr := client.CreateEvent(calendar.CreateEventInput{
+				Title:     "WatchChanges test event",
+				StartDate: start32,
+				EndDate:   start32.Add(time.Hour),
+			})
+			if cerr != nil {
+				log.Printf("WARN: CreateEvent for watch test: %v", cerr)
+			} else {
+				defer client.DeleteEvent(ev32.ID, calendar.SpanThisEvent)
+			}
+			select {
+			case _, ok := <-changes32:
+				if ok {
+					log.Printf("  Received change signal (expected)")
+				} else {
+					log.Printf("  FAIL: channel closed before signal")
+					failed++
+					passed-- // undo the check increment
+				}
+			case <-ctx32.Done():
+				log.Printf("  FAIL: timeout waiting for change signal")
+				failed++
+				passed-- // undo the check increment
+			}
+			cancel32()
+		}
+	}
+
+	// --- Test 33: WatchChanges — channel closes on ctx cancel ---
+	log.Println("\n--- Test 33: WatchChanges channel closes on ctx cancel ---")
+	{
+		ctx33, cancel33 := context.WithCancel(context.Background())
+		changes33, err := client.WatchChanges(ctx33)
+		check("WatchChanges start for cancel test", err)
+		if err == nil {
+			cancel33()
+			// Write a dummy event to unblock the pipe read.
+			select {
+			case <-changes33:
+			case <-time.After(2 * time.Second):
+			}
+			// Channel should now be closed.
+			select {
+			case _, ok := <-changes33:
+				if !ok {
+					log.Printf("  Channel closed after cancel (expected)")
+				} else {
+					log.Printf("  Got signal after cancel (draining...)")
+					// May get one pending signal; wait for close.
+					select {
+					case _, ok2 := <-changes33:
+						if !ok2 {
+							log.Printf("  Channel closed after draining (expected)")
+						} else {
+							log.Printf("  FAIL: channel still open after cancel")
+							failed++
+							passed--
+						}
+					case <-time.After(2 * time.Second):
+						log.Printf("  FAIL: timeout waiting for channel close")
+						failed++
+						passed--
+					}
+				}
+			case <-time.After(2 * time.Second):
+				log.Printf("  FAIL: timeout waiting for channel close after cancel")
+				failed++
+				passed--
+			}
+		}
+	}
+
+	// --- Test 34: WatchChanges — double call returns error ---
+	log.Println("\n--- Test 34: WatchChanges double call returns error ---")
+	{
+		ctx34a, cancel34a := context.WithCancel(context.Background())
+		defer cancel34a()
+		changes34, err := client.WatchChanges(ctx34a)
+		check("WatchChanges first call", err)
+		if err == nil {
+			_, err2 := client.WatchChanges(context.Background())
+			if err2 != nil {
+				log.Printf("  Second call returned error (expected): %v", err2)
+			} else {
+				log.Printf("  FAIL: second call should have returned error")
+				failed++
+				passed--
+			}
+			cancel34a()
+			// Drain to let goroutine exit.
+			for range changes34 {
+			}
+		}
+	}
+
+	// --- Test 35: WatchChanges — restart after first watcher stopped ---
+	log.Println("\n--- Test 35: WatchChanges restart after stop ---")
+	{
+		ctx35a, cancel35a := context.WithCancel(context.Background())
+		changes35a, err := client.WatchChanges(ctx35a)
+		check("WatchChanges first call for restart test", err)
+		if err == nil {
+			cancel35a()
+			for range changes35a {
+			} // wait for goroutine to exit
+
+			ctx35b, cancel35b := context.WithCancel(context.Background())
+			defer cancel35b()
+			_, err2 := client.WatchChanges(ctx35b)
+			if err2 != nil {
+				log.Printf("  FAIL: restart failed: %v", err2)
+				failed++
+				passed--
+			} else {
+				log.Printf("  Restart succeeded (expected)")
+				cancel35b()
+			}
 		}
 	}
 

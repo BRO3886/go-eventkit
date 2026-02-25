@@ -2,7 +2,10 @@
 
 package calendar
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // New creates a new Calendar [Client] and requests calendar access.
 //
@@ -45,3 +48,11 @@ func (c *Client) UpdateCalendar(id string, input UpdateCalendarInput) (*Calendar
 
 // DeleteCalendar permanently removes a calendar and all its events.
 func (c *Client) DeleteCalendar(id string) error { return ErrUnsupported }
+
+// WatchChanges returns a channel that receives a value whenever the
+// EventKit calendar database changes.
+//
+// Returns [ErrUnsupported] on non-darwin platforms.
+func (c *Client) WatchChanges(ctx context.Context) (<-chan struct{}, error) {
+	return nil, ErrUnsupported
+}

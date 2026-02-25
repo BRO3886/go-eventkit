@@ -4,6 +4,8 @@
 #include "bridge_darwin.h"
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 // Thread-local error message.
 static __thread char* rem_last_error = NULL;
@@ -35,6 +37,43 @@ static EKEventStore* get_store(void) {
         store = [[EKEventStore alloc] init];
     });
     return store;
+}
+
+// --- Change notifications (self-pipe) ---
+
+static int ek_rem_watch_pipe[2] = {-1, -1};
+static id ek_rem_store_observer = nil;
+
+int ek_rem_watch_start(void) {
+    if (ek_rem_watch_pipe[0] != -1) return 1;
+    if (pipe(ek_rem_watch_pipe) != 0) return 0;
+    fcntl(ek_rem_watch_pipe[0], F_SETFD, FD_CLOEXEC);
+    fcntl(ek_rem_watch_pipe[1], F_SETFD, FD_CLOEXEC);
+
+    EKEventStore *store = get_store();
+    ek_rem_store_observer = [[NSNotificationCenter defaultCenter]
+        addObserverForName:EKEventStoreChangedNotification
+                    object:store
+                     queue:nil
+                usingBlock:^(NSNotification *note) {
+                    char b = 1;
+                    write(ek_rem_watch_pipe[1], &b, 1);
+                }];
+    return 1;
+}
+
+int ek_rem_watch_read_fd(void) { return ek_rem_watch_pipe[0]; }
+
+void ek_rem_watch_stop(void) {
+    if (ek_rem_store_observer) {
+        [[NSNotificationCenter defaultCenter] removeObserver:ek_rem_store_observer];
+        ek_rem_store_observer = nil;
+    }
+    if (ek_rem_watch_pipe[0] != -1) {
+        close(ek_rem_watch_pipe[0]);
+        close(ek_rem_watch_pipe[1]);
+        ek_rem_watch_pipe[0] = ek_rem_watch_pipe[1] = -1;
+    }
 }
 
 // --- Date formatting ---

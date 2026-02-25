@@ -10,10 +10,17 @@ package reminders
 */
 import "C"
 import (
+	"context"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
+	"sync"
 	"unsafe"
 )
+
+var remWatchMu sync.Mutex
+var remWatchActive bool
 
 // New creates a new Reminders [Client] and requests reminders access.
 //
@@ -291,4 +298,59 @@ func getLastError() string {
 		return C.GoString(cerr)
 	}
 	return "unknown error"
+}
+
+// WatchChanges returns a channel that receives a value whenever the
+// EventKit reminders database changes. Changes include writes by this
+// process (CreateReminder, UpdateReminder, DeleteReminder, CreateList,
+// etc.), iCloud sync, Reminders.app edits, and changes by other apps
+// with reminders access.
+//
+// The channel is closed when ctx is cancelled or an internal read error
+// occurs. After ctx cancellation, any pending signals already in the
+// channel buffer are still readable.
+//
+// The channel carries no information about what specifically changed.
+// Callers should re-fetch the data they care about after each signal.
+// The channel is buffered (capacity 16); if the consumer falls behind,
+// excess signals are dropped rather than blocking.
+//
+// Only one watcher may be active per process. A second call to
+// WatchChanges while the first is active returns an error.
+//
+// Returns [ErrUnsupported] on non-darwin platforms.
+func (c *Client) WatchChanges(ctx context.Context) (<-chan struct{}, error) {
+	remWatchMu.Lock()
+	if remWatchActive {
+		remWatchMu.Unlock()
+		return nil, errors.New("reminders: watcher already active")
+	}
+	if C.ek_rem_watch_start() == 0 {
+		remWatchMu.Unlock()
+		return nil, errors.New("reminders: failed to start watcher")
+	}
+	remWatchActive = true
+	remWatchMu.Unlock()
+
+	fd := int(C.ek_rem_watch_read_fd())
+	f := os.NewFile(uintptr(fd), "ek-rem-watch-pipe")
+
+	ch := make(chan struct{}, 16)
+	go func() {
+		defer func() {
+			C.ek_rem_watch_stop()
+			remWatchMu.Lock()
+			remWatchActive = false
+			remWatchMu.Unlock()
+			close(ch)
+		}()
+		inner := watchChangesFromFile(ctx, f)
+		for range inner {
+			select {
+			case ch <- struct{}{}:
+			default:
+			}
+		}
+	}()
+	return ch, nil
 }

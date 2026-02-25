@@ -19,24 +19,28 @@ go-eventkit/
 ├── calendar/                    # Public: Calendar event bindings (Phase 1 — COMPLETE)
 │   ├── calendar.go              # Go types: Event, Calendar, Client, options, calendar CRUD inputs
 │   ├── parse.go                 # JSON parsing/marshaling (platform-agnostic, no build tags)
+│   ├── watch.go                 # watchChangesFromFile helper (no build tag, testable without cgo)
 │   ├── bridge_darwin.go         # cgo wrappers (//go:build darwin)
 │   ├── bridge_darwin.m          # ObjC EventKit bridge for EKEvent
 │   ├── bridge_darwin.h          # C header
 │   ├── bridge_other.go          # !darwin stubs
 │   ├── calendar_test.go         # Unit tests
+│   ├── watch_test.go            # WatchChanges unit tests (os.Pipe injection)
 │   └── bridge_mock_test.go      # Mock bridge tests (JSON contract)
 ├── reminders/                   # Public: Reminder bindings (Phase 2 — COMPLETE)
 │   ├── reminders.go             # Go types: Reminder, List, Client, options, list CRUD inputs
 │   ├── parse.go                 # JSON parsing/marshaling (platform-agnostic, no build tags)
+│   ├── watch.go                 # watchChangesFromFile helper (no build tag, testable without cgo)
 │   ├── bridge_darwin.go         # cgo wrappers
 │   ├── bridge_darwin.m          # ObjC EventKit bridge for EKReminder
 │   ├── bridge_darwin.h          # C header
 │   ├── bridge_other.go          # !darwin stubs
 │   ├── reminders_test.go        # Unit tests
+│   ├── watch_test.go            # WatchChanges unit tests (os.Pipe injection)
 │   └── bridge_mock_test.go      # Mock bridge tests (JSON contract)
 ├── scripts/                     # Integration tests (require real EventKit)
-│   ├── integration.go           # 31 calendar integration tests
-│   └── integration_reminders.go # 30 reminder integration tests
+│   ├── integration.go           # 35 calendar integration tests (incl. WatchChanges)
+│   └── integration_reminders.go # 34 reminder integration tests (incl. WatchChanges)
 ├── docs/
 │   ├── prd/
 │   │   ├── go-eventkit-prd.md           # Full PRD with API design
@@ -53,9 +57,10 @@ go-eventkit/
 
 ## Implementation Status
 - **Root package** (`eventkit.go`): Shared types — RecurrenceRule, StructuredLocation, Weekday, convenience constructors. Coverage: 100%.
-- **Phase 1**: `calendar/` package — COMPLETE. Full event CRUD + calendar container CRUD + recurrence rules + structured locations. Coverage: 56.7%.
-- **Phase 2**: `reminders/` package — COMPLETE. Full reminder CRUD + list container CRUD + recurrence rules. Coverage: 54.9%.
-- **Phase 3**: Future frameworks (Contacts, etc.) — out of scope for now
+- **Phase 1**: `calendar/` package — COMPLETE. Full event CRUD + calendar container CRUD + recurrence rules + structured locations. Coverage: ~54%.
+- **Phase 2**: `reminders/` package — COMPLETE. Full reminder CRUD + list container CRUD + recurrence rules. Coverage: ~53%.
+- **Phase 3**: Change notifications — COMPLETE. `WatchChanges(ctx) (<-chan struct{}, error)` on both clients. Self-pipe trick, EKEventStoreChangedNotification, buffered channel (cap 16), coalescing, single-watcher-per-package mutex. Integration tests: calendar 35 total, reminders 34 total.
+- **Future frameworks** (Contacts, etc.) — out of scope for now
 - **Deferred**: Concurrency improvements — see `docs/prd/concurrency-prd.md`
 - **Deferred**: Performance benchmarking — see `docs/prd/benchmarking-prd.md`
 - **Deferred**: 10 future capabilities — see `docs/prd/future-capabilities-prd.md`
@@ -80,6 +85,9 @@ go-eventkit/
 - EKRecurrenceRule: use complex initializer (all constraint arrays accept nil) — one code path for all rule types
 - `*float64` for raw location coordinates to distinguish "not set" from zero (Null Island at 0,0 is valid)
 - EKReminder inherits recurrence from EKCalendarItem — same ObjC bridge pattern as calendar
+- **WatchChanges self-pipe**: `addObserverForName:object:queue:usingBlock:` with `queue:nil` delivers on posting thread (no NSRunLoop needed); block calls `write(2)` only — never calls Go. Go goroutine reads the other pipe end. `watchChangesFromFile` extracted to `watch.go` (no build tag) for testability via `os.Pipe()`.
+- **Do NOT call `f.Close()` on watch pipe**: `os.NewFile` does not own the fd; `ek_cal_watch_stop`/`ek_rem_watch_stop` owns fd lifecycle via `close(2)`. Double-close would cause fd reuse bugs.
+- **Package-level watch mutex** (`calWatchMu`/`remWatchMu`): Not on `Client` struct — EKEventStore singleton is package-level, so the mutex must also be package-level. One watcher per package at a time.
 
 ## Prior Art
 - This package extracts the proven cgo + ObjC pattern from [rem](https://github.com/BRO3886/rem) (macOS Reminders CLI)
@@ -92,8 +100,8 @@ go-eventkit/
 go build ./...              # Compiles ObjC via cgo automatically
 go test ./...               # Unit tests (JSON parsing, types)
 GOOS=linux CGO_ENABLED=0 go build ./...  # Verify cross-platform stubs
-go run ./scripts/integration.go              # Calendar integration tests (31 tests)
-go run ./scripts/integration_reminders.go    # Reminder integration tests (30 tests)
+go run ./scripts/integration.go              # Calendar integration tests (35 tests)
+go run ./scripts/integration_reminders.go    # Reminder integration tests (34 tests)
 ```
 Test coverage ceiling is ~55-57% because cgo bridge functions (bridge_darwin.go) can't be reached by `go test`. All testable code (types, parsing, marshaling) achieves ~100% coverage.
 
