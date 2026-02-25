@@ -19,6 +19,7 @@ No AppleScript. No subprocesses. Direct EventKit access via cgo, with an idiomat
 
 - **Calendar events** — Full CRUD: list/create/rename/delete calendars, query events by date range, create, update, delete
 - **Reminders** — Full CRUD: list/create/rename/delete reminder lists, query/filter reminders, create, update, delete, complete/uncomplete
+- **Change notifications** — `WatchChanges(ctx)` returns a channel that signals on any EventKit database change (iCloud sync, other apps, this process's own writes)
 - **Recurrence rules** — Daily, weekly, monthly, yearly with full constraint support (days of week, days of month, set positions, end date/count)
 - **Structured locations** — Geographic coordinates and geofence radius on events
 - **All accounts** — Sees iCloud, Google, Exchange, subscribed, and local calendars/reminders
@@ -150,6 +151,68 @@ func main() {
 }
 ```
 
+### Change Notifications
+
+React to any EventKit database change — this process's own writes, iCloud sync, Calendar.app / Reminders.app edits, Exchange push, or other apps:
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "os"
+    "os/signal"
+    "time"
+
+    "github.com/BRO3886/go-eventkit/calendar"
+)
+
+func main() {
+    client, err := calendar.New()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+    defer stop()
+
+    changes, err := client.WatchChanges(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    fmt.Println("Watching for calendar changes. Press Ctrl+C to stop.")
+    for range changes {
+        // A change arrived — re-fetch whatever you care about.
+        events, err := client.Events(time.Now(), time.Now().Add(7*24*time.Hour))
+        if err != nil {
+            log.Println("fetch error:", err)
+            continue
+        }
+        fmt.Printf("[%s] %d events\n", time.Now().Format(time.TimeOnly), len(events))
+    }
+    // Channel closed: ctx cancelled (Ctrl+C) or internal pipe error.
+}
+```
+
+The same API is available on `reminders.Client`:
+
+```go
+changes, err := client.WatchChanges(ctx) // reminders.Client
+for range changes {
+    items, _ := client.Reminders(reminders.WithCompleted(false))
+    refresh(items)
+}
+```
+
+**Behaviour:**
+- Channel is buffered (capacity 16). If your consumer falls behind, excess signals are dropped — safe because you always re-fetch everything.
+- Only one watcher may be active per package at a time. A second call while the first is active returns `"calendar: watcher already active"`.
+- Channel closes when `ctx` is cancelled or an internal pipe read error occurs.
+- Returns `ErrUnsupported` on non-darwin platforms.
+
 ## API Reference
 
 ### Calendar Package
@@ -170,6 +233,7 @@ import "github.com/BRO3886/go-eventkit/calendar"
 | `CreateCalendar(input) (*Calendar, error)`           | Create a new calendar             |
 | `UpdateCalendar(id, input) (*Calendar, error)`       | Rename or recolor a calendar      |
 | `DeleteCalendar(id) error`                           | Delete a calendar and its events  |
+| `WatchChanges(ctx) (<-chan struct{}, error)`          | Watch for any database change     |
 
 **Filter options:** `WithCalendar(name)`, `WithCalendarID(id)`, `WithSearch(query)`
 
@@ -195,6 +259,7 @@ import "github.com/BRO3886/go-eventkit/reminders"
 | `CreateList(input) (*List, error)`             | Create a new reminder list            |
 | `UpdateList(id, input) (*List, error)`         | Rename or recolor a list              |
 | `DeleteList(id) error`                         | Delete a list and its reminders       |
+| `WatchChanges(ctx) (<-chan struct{}, error)`    | Watch for any database change         |
 
 **Filter options:** `WithList(name)`, `WithListID(id)`, `WithCompleted(bool)`, `WithSearch(query)`, `WithDueBefore(time)`, `WithDueAfter(time)`
 
