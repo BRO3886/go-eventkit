@@ -29,6 +29,7 @@ type rawEvent struct {
 	IsDetached         bool                  `json:"isDetached"`
 	OccurrenceDate     *string               `json:"occurrenceDate"`
 	StructuredLocation *rawStructuredLocation `json:"structuredLocation"`
+	TravelTime         *float64              `json:"travelTime,omitempty"`
 	Alerts             []rawAlert            `json:"alerts"`
 	CreatedAt          *string               `json:"createdAt"`
 	ModifiedAt         *string               `json:"modifiedAt"`
@@ -221,6 +222,10 @@ func convertRawEvent(r rawEvent) Event {
 		e.StructuredLocation = sl
 	}
 
+	if r.TravelTime != nil && *r.TravelTime != 0 {
+		e.TravelTime = time.Duration(*r.TravelTime) * time.Second
+	}
+
 	return e
 }
 
@@ -279,6 +284,7 @@ type createEventJSON struct {
 	URL                string                      `json:"url,omitempty"`
 	Calendar           string                      `json:"calendar,omitempty"`
 	Alerts             []alertJSON                 `json:"alerts,omitempty"`
+	TravelTime         *float64                    `json:"travelTime,omitempty"`
 	TimeZone           string                      `json:"timeZone,omitempty"`
 	RecurrenceRules    []recurrenceRuleJSON        `json:"recurrenceRules,omitempty"`
 	StructuredLocation *structuredLocationJSON     `json:"structuredLocation,omitempty"`
@@ -387,6 +393,11 @@ func marshalCreateInput(input CreateEventInput) ([]byte, error) {
 
 	j.StructuredLocation = marshalStructuredLocation(input.StructuredLocation)
 
+	if input.TravelTime != 0 {
+		secs := input.TravelTime.Seconds()
+		j.TravelTime = &secs
+	}
+
 	return json.Marshal(j)
 }
 
@@ -460,6 +471,9 @@ func marshalUpdateInput(input UpdateEventInput) ([]byte, error) {
 	}
 	if input.StructuredLocation != nil {
 		m["structuredLocation"] = marshalStructuredLocation(input.StructuredLocation)
+	}
+	if input.TravelTime != nil {
+		m["travelTime"] = input.TravelTime.Seconds()
 	}
 
 	return json.Marshal(m)
