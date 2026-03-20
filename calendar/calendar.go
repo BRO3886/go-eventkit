@@ -143,6 +143,9 @@ type Event struct {
 	// StructuredLocation contains geographic coordinates and geofence data.
 	// Nil if no structured location is set. The Title field may differ from Location.
 	StructuredLocation *eventkit.StructuredLocation `json:"structuredLocation,omitempty"`
+	// TravelTime is the travel time before the event. Zero means no travel time.
+	// Uses private EventKit API via KVC — not part of Apple's public API.
+	TravelTime time.Duration `json:"travelTime,omitempty"`
 	// Alerts lists the notification alerts configured for this event.
 	Alerts []Alert `json:"alerts"`
 	// CreatedAt is when the event was first created.
@@ -372,6 +375,9 @@ type CreateEventInput struct {
 	Calendar string `json:"calendar"`
 	// Alerts configures notification alerts before the event.
 	Alerts []Alert `json:"alerts"`
+	// TravelTime sets the travel time before the event.
+	// Uses private EventKit API via KVC — not part of Apple's public API.
+	TravelTime time.Duration `json:"travelTime,omitempty"`
 	// TimeZone is the IANA timezone for the event (e.g., "Asia/Tokyo").
 	// If empty, the system timezone is used.
 	TimeZone string `json:"timeZone"`
@@ -402,7 +408,10 @@ type UpdateEventInput struct {
 	Calendar *string `json:"calendar,omitempty"`
 	// Alerts replaces all existing alerts. Pass an empty slice to remove all alerts.
 	Alerts   *[]Alert `json:"alerts,omitempty"`
-	TimeZone *string  `json:"timeZone,omitempty"`
+	// TravelTime updates the travel time. Set to non-nil to update.
+	// Use a pointer to zero duration to clear travel time.
+	TravelTime *time.Duration `json:"travelTime,omitempty"`
+	TimeZone   *string        `json:"timeZone,omitempty"`
 	// RecurrenceRules replaces all existing recurrence rules.
 	// Pass an empty slice to make the event non-recurring.
 	// Pass nil to leave recurrence unchanged.

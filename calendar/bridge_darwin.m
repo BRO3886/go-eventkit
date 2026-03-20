@@ -128,6 +128,12 @@ static NSDictionary* event_to_dict(EKEvent* e) {
     d[@"recurring"] = e.hasRecurrenceRules ? @YES : @NO;
     d[@"isDetached"] = e.isDetached ? @YES : @NO;
 
+    // Travel time (private API via KVC).
+    NSNumber *travel = [e valueForKey:@"travelTime"];
+    if (travel && [travel doubleValue] != 0) {
+        d[@"travelTime"] = travel;
+    }
+
     // Occurrence date (for recurring events).
     if (e.occurrenceDate) {
         d[@"occurrenceDate"] = format_date(e.occurrenceDate);
@@ -577,6 +583,11 @@ ek_result_t ek_cal_create_event(const char* json_input) {
             }
         }
 
+        // Travel time (private API via KVC).
+        if (input[@"travelTime"] && input[@"travelTime"] != [NSNull null]) {
+            [event setValue:input[@"travelTime"] forKey:@"travelTime"];
+        }
+
         // Recurrence rules.
         if (input[@"recurrenceRules"] && input[@"recurrenceRules"] != [NSNull null]) {
             NSArray* ruleInputs = input[@"recurrenceRules"];
@@ -773,6 +784,15 @@ ek_result_t ek_cal_update_event(const char* event_id, const char* json_input, in
                     EKAlarm* alarm = [EKAlarm alarmWithRelativeOffset:offset];
                     [event addAlarm:alarm];
                 }
+            }
+        }
+
+        // Travel time (private API via KVC).
+        if (input[@"travelTime"] != nil) {
+            if (input[@"travelTime"] == [NSNull null]) {
+                [event setValue:@(0) forKey:@"travelTime"];
+            } else {
+                [event setValue:input[@"travelTime"] forKey:@"travelTime"];
             }
         }
 
