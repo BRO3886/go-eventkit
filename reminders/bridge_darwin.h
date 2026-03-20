@@ -64,6 +64,12 @@ ek_result_t ek_rem_update_list(const char* list_id, const char* json_input);
 // Returns "ok" in result on success. Caller must free.
 ek_result_t ek_rem_delete_list(const char* list_id);
 
+// ek_rem_delete_reminders deletes multiple reminders in a single bridge call.
+// json_ids is a JSON array of reminder identifiers.
+// Returns a JSON object mapping failed reminder IDs to error messages.
+// Caller must free result with ek_rem_free.
+ek_result_t ek_rem_delete_reminders(const char* json_ids);
+
 // ek_rem_free frees a string returned by the above functions.
 void ek_rem_free(char* ptr);
 

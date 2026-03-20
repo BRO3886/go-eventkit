@@ -230,6 +230,7 @@ import "github.com/BRO3886/go-eventkit/calendar"
 | `CreateEvent(input) (*Event, error)`                 | Create a new event                |
 | `UpdateEvent(id, input, span) (*Event, error)`       | Update an existing event          |
 | `DeleteEvent(id, span) error`                        | Delete an event                   |
+| `DeleteEvents(ids, span) map[string]error`           | Batch delete events               |
 | `CreateCalendar(input) (*Calendar, error)`           | Create a new calendar             |
 | `UpdateCalendar(id, input) (*Calendar, error)`       | Rename or recolor a calendar      |
 | `DeleteCalendar(id) error`                           | Delete a calendar and its events  |
@@ -237,7 +238,7 @@ import "github.com/BRO3886/go-eventkit/calendar"
 
 **Filter options:** `WithCalendar(name)`, `WithCalendarID(id)`, `WithSearch(query)`
 
-**Recurrence constructors** (from root `eventkit` package): `eventkit.Daily(interval)`, `eventkit.Weekly(interval, ...days)`, `eventkit.Monthly(interval, ...daysOfMonth)`, `eventkit.Yearly(interval)` — chain with `.Until(time)` or `.Count(n)`
+**Recurrence constructors** (from root `eventkit` package): `eventkit.Daily(interval)`, `eventkit.Weekly(interval, ...days)`, `eventkit.Monthly(interval, ...daysOfMonth)`, `eventkit.Yearly(interval)` — chain with `.Until(time)` or `.Count(n)`. Call `rule.Validate()` to check constraints before creating.
 
 ### Dateparser Package
 
@@ -270,6 +271,7 @@ import "github.com/BRO3886/go-eventkit/reminders"
 | `CreateReminder(input) (*Reminder, error)`     | Create a new reminder                 |
 | `UpdateReminder(id, input) (*Reminder, error)` | Update an existing reminder           |
 | `DeleteReminder(id) error`                     | Delete a reminder                     |
+| `DeleteReminders(ids) map[string]error`        | Batch delete reminders                |
 | `CompleteReminder(id) (*Reminder, error)`      | Mark as completed                     |
 | `UncompleteReminder(id) (*Reminder, error)`    | Mark as incomplete                    |
 | `CreateList(input) (*List, error)`             | Create a new reminder list            |

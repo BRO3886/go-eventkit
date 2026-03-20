@@ -343,6 +343,16 @@ static EKCalendar* find_calendar_by_id(EKEventStore* store, NSString* calId) {
     return nil;
 }
 
+// --- Available calendar names (for error messages) ---
+
+static NSString* available_calendar_names(EKEventStore* store) {
+    NSMutableArray* names = [NSMutableArray array];
+    for (EKCalendar* cal in [store calendarsForEntityType:EKEntityTypeEvent]) {
+        [names addObject:cal.title];
+    }
+    return [names componentsJoinedByString:@", "];
+}
+
 // --- Public API ---
 
 ek_result_t ek_cal_request_access(void) {
@@ -429,7 +439,7 @@ ek_result_t ek_cal_fetch_events(const char* start_date, const char* end_date,
             if (cal) {
                 calendars = @[cal];
             } else {
-                res.error = strdup([[NSString stringWithFormat:@"calendar not found: %s", calendar_id] UTF8String]);
+                res.error = strdup([[NSString stringWithFormat:@"calendar not found: %s (available: %@)", calendar_id, available_calendar_names(store)] UTF8String]);
                 return res;
             }
         }
@@ -571,7 +581,7 @@ ek_result_t ek_cal_create_event(const char* json_input) {
                 NSString* calName = input[@"calendar"];
                 EKCalendar* cal = find_calendar_by_name(store, calName);
                 if (!cal) {
-                    res.error = strdup([[NSString stringWithFormat:@"calendar not found: %@", calName] UTF8String]);
+                    res.error = strdup([[NSString stringWithFormat:@"calendar not found: %@ (available: %@)", calName, available_calendar_names(store)] UTF8String]);
                     return;
                 }
                 event.calendar = cal;
@@ -768,7 +778,7 @@ ek_result_t ek_cal_update_event(const char* event_id, const char* json_input, in
                 NSString* calName = input[@"calendar"];
                 EKCalendar* cal = find_calendar_by_name(store, calName);
                 if (!cal) {
-                    res.error = strdup([[NSString stringWithFormat:@"calendar not found: %@", calName] UTF8String]);
+                    res.error = strdup([[NSString stringWithFormat:@"calendar not found: %@ (available: %@)", calName, available_calendar_names(store)] UTF8String]);
                     return;
                 }
                 event.calendar = cal;
@@ -896,6 +906,19 @@ ek_result_t ek_cal_update_event(const char* event_id, const char* json_input, in
     return res;
 }
 
+// --- Available source names (for error messages) ---
+
+static NSString* available_source_names(EKEventStore* store, EKEntityType entityType) {
+    NSMutableArray* names = [NSMutableArray array];
+    for (EKSource* source in store.sources) {
+        NSSet* cals = [source calendarsForEntityType:entityType];
+        if (cals.count > 0) {
+            [names addObject:source.title];
+        }
+    }
+    return [names componentsJoinedByString:@", "];
+}
+
 // --- Find source by name (case-insensitive) ---
 
 static EKSource* find_source_by_name(EKEventStore* store, NSString* name) {
@@ -970,7 +993,7 @@ ek_result_t ek_cal_create_calendar(const char* json_input) {
             // Source (required — validated in Go layer).
             EKSource* source = find_source_by_name(store, input[@"source"]);
             if (!source) {
-                res.error = strdup([[NSString stringWithFormat:@"source not found: %@", input[@"source"]] UTF8String]);
+                res.error = strdup([[NSString stringWithFormat:@"source not found: %@ (available: %@)", input[@"source"], available_source_names(store, EKEntityTypeEvent)] UTF8String]);
                 return;
             }
             cal.source = source;
@@ -1096,6 +1119,45 @@ ek_result_t ek_cal_delete_calendar(const char* calendar_id) {
             }
 
             res.result = strdup("ok");
+        }
+    });
+    return res;
+}
+
+ek_result_t ek_cal_delete_events(const char* json_ids, int span) {
+    __block ek_result_t res = {NULL, NULL};
+    dispatch_sync(get_write_queue(), ^{
+        @autoreleasepool {
+            if (!json_ids) {
+                res.error = strdup([@"JSON input is required" UTF8String]);
+                return;
+            }
+
+            NSData* data = [NSData dataWithBytes:json_ids length:strlen(json_ids)];
+            NSError* parseError = nil;
+            NSArray* ids = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
+            if (!ids) {
+                res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
+                return;
+            }
+
+            EKEventStore* store = get_store();
+            EKSpan ekSpan = (span == 1) ? EKSpanFutureEvents : EKSpanThisEvent;
+            NSMutableDictionary* errors = [NSMutableDictionary dictionary];
+
+            for (NSString* eid in ids) {
+                EKEvent* event = [store eventWithIdentifier:eid];
+                if (!event) continue; // silently skip not found
+
+                NSError* removeError = nil;
+                BOOL removed = [store removeEvent:event span:ekSpan commit:YES error:&removeError];
+                if (!removed) {
+                    errors[eid] = [removeError localizedDescription] ?: @"unknown error";
+                }
+            }
+
+            res.result = to_json(errors);
+            if (!res.result) res.error = strdup("JSON serialization failed");
         }
     });
     return res;

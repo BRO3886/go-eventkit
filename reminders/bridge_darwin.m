@@ -289,6 +289,16 @@ static EKCalendar* find_list_by_name(EKEventStore* store, NSString* name) {
     return nil;
 }
 
+// --- Available list names (for error messages) ---
+
+static NSString* available_list_names(EKEventStore* store) {
+    NSMutableArray* names = [NSMutableArray array];
+    for (EKCalendar* cal in [store calendarsForEntityType:EKEntityTypeReminder]) {
+        [names addObject:cal.title];
+    }
+    return [names componentsJoinedByString:@", "];
+}
+
 // --- Find reminder by ID or prefix ---
 
 static EKReminder* find_reminder_by_id(NSString* targetId) {
@@ -395,7 +405,7 @@ ek_result_t ek_rem_fetch_reminders(const char* list_name,
                 }
             }
             if (matched.count == 0) {
-                res.error = strdup([[NSString stringWithFormat:@"list not found: %s", list_name] UTF8String]);
+                res.error = strdup([[NSString stringWithFormat:@"list not found: %s (available: %@)", list_name, available_list_names(store)] UTF8String]);
                 return res;
             }
             cals = matched;
@@ -510,7 +520,7 @@ ek_result_t ek_rem_create_reminder(const char* json_input) {
                 NSString* listName = input[@"listName"];
                 EKCalendar* cal = find_list_by_name(store, listName);
                 if (!cal) {
-                    res.error = strdup([[NSString stringWithFormat:@"list not found: %@", listName] UTF8String]);
+                    res.error = strdup([[NSString stringWithFormat:@"list not found: %@ (available: %@)", listName, available_list_names(store)] UTF8String]);
                     return;
                 }
                 reminder.calendar = cal;
@@ -801,7 +811,7 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
                 NSString* listName = input[@"listName"];
                 EKCalendar* cal = find_list_by_name(store, listName);
                 if (!cal) {
-                    res.error = strdup([[NSString stringWithFormat:@"list not found: %@", listName] UTF8String]);
+                    res.error = strdup([[NSString stringWithFormat:@"list not found: %@ (available: %@)", listName, available_list_names(store)] UTF8String]);
                     return;
                 }
                 reminder.calendar = cal;
@@ -817,6 +827,44 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
             }
 
             res.result = to_json(reminder_to_dict(reminder));
+            if (!res.result) res.error = strdup("JSON serialization failed");
+        }
+    });
+    return res;
+}
+
+ek_result_t ek_rem_delete_reminders(const char* json_ids) {
+    __block ek_result_t res = {NULL, NULL};
+    dispatch_sync(get_write_queue(), ^{
+        @autoreleasepool {
+            if (!json_ids) {
+                res.error = strdup([@"JSON input is required" UTF8String]);
+                return;
+            }
+
+            NSData* data = [NSData dataWithBytes:json_ids length:strlen(json_ids)];
+            NSError* parseError = nil;
+            NSArray* ids = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
+            if (!ids) {
+                res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
+                return;
+            }
+
+            EKEventStore* store = get_store();
+            NSMutableDictionary* errors = [NSMutableDictionary dictionary];
+
+            for (NSString* rid in ids) {
+                EKReminder* reminder = find_reminder_by_id(rid);
+                if (!reminder) continue; // silently skip not found
+
+                NSError* removeError = nil;
+                BOOL removed = [store removeReminder:reminder commit:YES error:&removeError];
+                if (!removed) {
+                    errors[rid] = [removeError localizedDescription] ?: @"unknown error";
+                }
+            }
+
+            res.result = to_json(errors);
             if (!res.result) res.error = strdup("JSON serialization failed");
         }
     });
@@ -851,6 +899,19 @@ ek_result_t ek_rem_delete_reminder(const char* reminder_id) {
         }
     });
     return res;
+}
+
+// --- Available source names (for error messages) ---
+
+static NSString* available_source_names(EKEventStore* store, EKEntityType entityType) {
+    NSMutableArray* names = [NSMutableArray array];
+    for (EKSource* source in store.sources) {
+        NSSet* cals = [source calendarsForEntityType:entityType];
+        if (cals.count > 0) {
+            [names addObject:source.title];
+        }
+    }
+    return [names componentsJoinedByString:@", "];
 }
 
 // --- Find source by name (case-insensitive) ---
@@ -938,7 +999,7 @@ ek_result_t ek_rem_create_list(const char* json_input) {
             // Source (required — validated in Go layer).
             EKSource* source = find_source_by_name(store, input[@"source"]);
             if (!source) {
-                res.error = strdup([[NSString stringWithFormat:@"source not found: %@", input[@"source"]] UTF8String]);
+                res.error = strdup([[NSString stringWithFormat:@"source not found: %@ (available: %@)", input[@"source"], available_source_names(store, EKEntityTypeReminder)] UTF8String]);
                 return;
             }
             cal.source = source;

@@ -41,6 +41,15 @@ func (c *Client) DeleteReminder(id string) error {
 	return ErrUnsupported
 }
 
+// DeleteReminders permanently removes multiple reminders in a single bridge call.
+func (c *Client) DeleteReminders(ids []string) map[string]error {
+	result := make(map[string]error)
+	for _, id := range ids {
+		result[id] = ErrUnsupported
+	}
+	return result
+}
+
 // CreateList creates a new reminder list and returns it with its assigned ID.
 func (c *Client) CreateList(input CreateListInput) (*List, error) { return nil, ErrUnsupported }
 
