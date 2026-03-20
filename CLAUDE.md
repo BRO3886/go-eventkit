@@ -38,6 +38,11 @@ go-eventkit/
 │   ├── watch_test.go            # 4 unit tests via os.Pipe injection
 │   ├── reminders_test.go        # Unit tests
 │   └── bridge_mock_test.go      # Mock bridge tests (JSON contract)
+├── dateparser/                  # Public: Natural language date parsing (shared by cal + rem CLIs)
+│   ├── dateparser.go            # ParseDate, ParseDateRelativeTo, options, all parse functions
+│   ├── format.go                # FormatDuration, FormatTimeRange, ParseAlertDuration
+│   ├── dateparser_test.go       # 35 test functions (keywords, relative, weekday, tz, DST, etc.)
+│   └── format_test.go           # Format/duration test suite
 ├── scripts/                     # Integration tests (require real EventKit)
 │   ├── integration.go           # 35 calendar integration tests (incl. WatchChanges tests 32-35)
 │   ├── integration_reminders.go # 34 reminder integration tests (incl. WatchChanges tests 31-34)
@@ -63,6 +68,7 @@ go-eventkit/
 - **Root package** (`eventkit.go`): Shared types — RecurrenceRule, StructuredLocation, Weekday, convenience constructors. Coverage: 100%.
 - **Phase 1**: `calendar/` package — COMPLETE. Full event CRUD + calendar container CRUD + recurrence rules + structured locations. Coverage: 56.7%.
 - **Phase 2**: `reminders/` package — COMPLETE. Full reminder CRUD + list container CRUD + recurrence rules. Coverage: 54.9%.
+- **dateparser**: `dateparser/` package — COMPLETE. Shared natural language date parser for cal + rem CLIs. 3 options (`WithDefaultHour`, `WithSmartTimeRollover`, `WithEOWSkipToday`). 35 test functions.
 - **Phase 3**: `WatchChanges` — COMPLETE (v0.3.0). Change notifications via self-pipe + EKEventStoreChangedNotification. 4 unit tests per package. See `docs/prd/change-notifications-prd.md`.
 - **Deferred**: Future frameworks (Contacts, etc.) — out of scope for now
 - **Deferred**: Concurrency improvements — see `docs/prd/concurrency-prd.md`
@@ -113,9 +119,12 @@ go run ./scripts/watch-demo/producer         # Terminal 2: creates/updates/delet
 ```
 Test coverage ceiling is ~55-57% because cgo bridge functions (bridge_darwin.go) can't be reached by `go test`. All testable code (types, parsing, marshaling) achieves ~100% coverage.
 
-## Downstream Consumer
-- `cal` CLI (separate repo) will be the first consumer of `calendar/` package
-- `rem` CLI will eventually migrate to use `reminders/` package
+## Downstream Consumers
+- `cal` CLI (separate repo) — consumes `calendar/` and `dateparser/` packages
+- `rem` CLI — will migrate to consume `reminders/` and `dateparser/` packages
+- **dateparser consumer migration**:
+  - cal: `dateparser.ParseDate(input)` — no options, defaults match cal behavior
+  - rem: `dateparser.ParseDate(input, dateparser.WithDefaultHour(9), dateparser.WithSmartTimeRollover(), dateparser.WithEOWSkipToday())`
 
 ## Journal
 Engineering journals live in `journals/` dir. See `.claude/commands/journal.md` for the journaling command.

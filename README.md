@@ -22,6 +22,7 @@ No AppleScript. No subprocesses. Direct EventKit access via cgo, with an idiomat
 - **Recurrence rules** — Daily, weekly, monthly, yearly with full constraint support (days of week, days of month, set positions, end date/count)
 - **Structured locations** — Geographic coordinates and geofence radius on events
 - **Change notifications** — `WatchChanges(ctx)` delivers a signal on any EventKit database change (iCloud sync, other apps, own writes) via a Go channel
+- **Date parsing** — Shared natural language date parser (`dateparser/`) with support for "tomorrow 2pm", "next friday", "in 3 hours", "eow", ISO 8601, and more
 - **All accounts** — Sees iCloud, Google, Exchange, subscribed, and local calendars/reminders
 - **Pure Go API** — Idiomatic types, no cgo leaking to consumers
 - **Cross-platform safe** — Types importable everywhere, bridge returns `ErrUnsupported` on non-darwin
@@ -181,6 +182,36 @@ The channel is buffered (cap 16) and excess signals are coalesced — consumers 
 
 > **Cross-process note**: If your consumer and producer are separate binaries, the consumer must pump the main CFRunLoop to receive cross-process `EKEventStoreChangedNotification`. See [`scripts/watch-demo/consumer`](scripts/watch-demo/consumer/main.go) for the `runtime.LockOSThread()` + `CFRunLoopRunInMode` pattern. Single-binary use (same process writes and watches) works without any run loop setup.
 
+### Date Parsing
+
+```go
+import "github.com/BRO3886/go-eventkit/dateparser"
+
+// Simple usage (defaults: midnight, no rollover)
+t, err := dateparser.ParseDate("tomorrow 2pm")
+t, err = dateparser.ParseDate("next friday")
+t, err = dateparser.ParseDate("in 3 hours")
+t, err = dateparser.ParseDate("mar 15")
+t, err = dateparser.ParseDate("eow") // Friday 5pm
+
+// Reminder-style: bare dates at 9am, past times roll to tomorrow
+t, err = dateparser.ParseDate("tomorrow",
+    dateparser.WithDefaultHour(9),        // "today" → 9am not midnight
+    dateparser.WithSmartTimeRollover(),    // "9am" when past → tomorrow
+    dateparser.WithEOWSkipToday(),         // "eow" on Friday → next Friday
+)
+
+// Deterministic (for testing)
+t, err = dateparser.ParseDateRelativeTo("in 3 hours", refTime)
+
+// Formatting
+dateparser.FormatDuration(start, end, false)    // "1h 30m"
+dateparser.FormatTimeRange(start, end, true)    // "All Day"
+d, err := dateparser.ParseAlertDuration("15m")  // 15 * time.Minute
+```
+
+Supports: keywords (`today`, `tomorrow`, `now`, `eod`, `eow`, `this week`, `next week`, `next month`), relative (`in 3 hours`, `5 days ago`), weekdays (`next monday`, `friday 2pm`), month-day (`mar 15`, `21 march 2026`), time-only (`5pm`, `17:00`), and standard formats (ISO 8601, RFC 3339, US dates).
+
 ## API Reference
 
 ### Calendar Package
@@ -206,6 +237,22 @@ import "github.com/BRO3886/go-eventkit/calendar"
 **Filter options:** `WithCalendar(name)`, `WithCalendarID(id)`, `WithSearch(query)`
 
 **Recurrence constructors** (from root `eventkit` package): `eventkit.Daily(interval)`, `eventkit.Weekly(interval, ...days)`, `eventkit.Monthly(interval, ...daysOfMonth)`, `eventkit.Yearly(interval)` — chain with `.Until(time)` or `.Count(n)`
+
+### Dateparser Package
+
+```go
+import "github.com/BRO3886/go-eventkit/dateparser"
+```
+
+| Function | Description |
+| --- | --- |
+| `ParseDate(input, ...Option) (time.Time, error)` | Parse natural language date using wall clock |
+| `ParseDateRelativeTo(input, now, ...Option) (time.Time, error)` | Parse relative to a given time (testable) |
+| `FormatDuration(start, end, allDay) string` | Human-readable duration ("1h 30m", "All Day") |
+| `FormatTimeRange(start, end, allDay) string` | Human-readable time range for display |
+| `ParseAlertDuration(s) (time.Duration, error)` | Parse "15m", "1h", "1d" into duration |
+
+**Options:** `WithDefaultHour(h)` (bare date hour, default 0), `WithSmartTimeRollover()` (past times → tomorrow), `WithEOWSkipToday()` (eow on Friday → next Friday)
 
 ### Reminders Package
 
@@ -299,6 +346,7 @@ Manage permissions in **System Settings > Privacy & Security > Calendars / Remin
 graph LR
     App["Your Go App"] --> Cal["calendar/"]
     App --> Rem["reminders/"]
+    App --> DP["dateparser/<br/><i>date parsing</i>"]
     Cal --> EK["eventkit.go<br/><i>shared types</i>"]
     Rem --> EK
 
@@ -330,6 +378,7 @@ graph LR
     style EK fill:#f0ad4e,color:#fff
     style EKStore1 fill:#5cb85c,color:#fff
     style EKStore2 fill:#5cb85c,color:#fff
+    style DP fill:#d9534f,color:#fff
 ```
 
 The data flow is: **Go types → JSON string → cgo → ObjC → EventKit** (and back). Each package has its own `EKEventStore` singleton — C objects can't cross cgo package boundaries. The public API is pure Go; cgo never leaks to consumers.
@@ -348,7 +397,8 @@ These are Apple EventKit limitations, not bugs:
 
 ```bash
 go build ./...                                        # Build
-go test ./...                                         # Unit tests
+go test ./...                                         # Unit tests (includes dateparser)
+go test ./dateparser/...                              # Dateparser tests only (35 tests)
 go run -tags integration ./scripts/integration.go     # Calendar integration tests
 go run -tags integration ./scripts/integration_reminders.go  # Reminder integration tests
 GOOS=linux CGO_ENABLED=0 go build ./...               # Cross-platform stubs
