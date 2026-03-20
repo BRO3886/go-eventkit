@@ -22,27 +22,41 @@ import (
 var remWatchMu sync.Mutex
 var remWatchActive bool
 
+func resultErr(res C.ek_result_t) error {
+	if res.error != nil {
+		msg := C.GoString(res.error)
+		C.ek_rem_free(res.error)
+		return errors.New(msg)
+	}
+	return errors.New("unknown error")
+}
+
+func containsLower(s, substr string) bool {
+	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
+}
+
 // New creates a new Reminders [Client] and requests reminders access.
 //
 // On first call, macOS displays a TCC prompt requesting reminders access.
 // Returns [ErrAccessDenied] if the user denies access.
 // Returns [ErrUnsupported] on non-darwin platforms.
 func New() (*Client, error) {
-	granted := C.ek_rem_request_access()
-	if granted == 0 {
-		return nil, fmt.Errorf("%w: %s", ErrAccessDenied, getLastError())
+	res := C.ek_rem_request_access()
+	if res.error != nil {
+		return nil, fmt.Errorf("%w: %s", ErrAccessDenied, resultErr(res))
 	}
+	C.ek_rem_free(res.result)
 	return &Client{}, nil
 }
 
 // Lists returns all reminder lists across all accounts (iCloud, Exchange, etc.).
 func (c *Client) Lists() ([]List, error) {
-	cstr := C.ek_rem_fetch_lists()
-	if cstr == nil {
-		return nil, fmt.Errorf("reminders: %s", getLastError())
+	res := C.ek_rem_fetch_lists()
+	if res.error != nil {
+		return nil, fmt.Errorf("reminders: %w", resultErr(res))
 	}
-	defer C.ek_rem_free(cstr)
-	return parseListsJSON(C.GoString(cstr))
+	defer C.ek_rem_free(res.result)
+	return parseListsJSON(C.GoString(res.result))
 }
 
 // Reminders returns reminders matching the given filter options.
@@ -86,12 +100,12 @@ func (c *Client) Reminders(opts ...ListOption) ([]Reminder, error) {
 		defer C.free(unsafe.Pointer(cAfter))
 	}
 
-	cstr := C.ek_rem_fetch_reminders(cList, cCompleted, cSearch, cBefore, cAfter)
-	if cstr == nil {
-		return nil, fmt.Errorf("reminders: %s", getLastError())
+	res := C.ek_rem_fetch_reminders(cList, cCompleted, cSearch, cBefore, cAfter)
+	if res.error != nil {
+		return nil, fmt.Errorf("reminders: %w", resultErr(res))
 	}
-	defer C.ek_rem_free(cstr)
-	return parseRemindersJSON(C.GoString(cstr))
+	defer C.ek_rem_free(res.result)
+	return parseRemindersJSON(C.GoString(res.result))
 }
 
 // Reminder returns a single reminder by ID.
@@ -101,13 +115,12 @@ func (c *Client) Reminder(id string) (*Reminder, error) {
 	cID := C.CString(id)
 	defer C.free(unsafe.Pointer(cID))
 
-	cstr := C.ek_rem_get_reminder(cID)
-	if cstr == nil {
-		errMsg := getLastError()
-		return nil, fmt.Errorf("%w: %s", ErrNotFound, errMsg)
+	res := C.ek_rem_get_reminder(cID)
+	if res.error != nil {
+		return nil, fmt.Errorf("%w: %s", ErrNotFound, resultErr(res))
 	}
-	defer C.ek_rem_free(cstr)
-	return parseReminderJSON(C.GoString(cstr))
+	defer C.ek_rem_free(res.result)
+	return parseReminderJSON(C.GoString(res.result))
 }
 
 // CreateReminder creates a new reminder and returns it with its assigned ID.
@@ -121,12 +134,12 @@ func (c *Client) CreateReminder(input CreateReminderInput) (*Reminder, error) {
 	cJSON := C.CString(jsonStr)
 	defer C.free(unsafe.Pointer(cJSON))
 
-	cstr := C.ek_rem_create_reminder(cJSON)
-	if cstr == nil {
-		return nil, fmt.Errorf("reminders: %s", getLastError())
+	res := C.ek_rem_create_reminder(cJSON)
+	if res.error != nil {
+		return nil, fmt.Errorf("reminders: %w", resultErr(res))
 	}
-	defer C.ek_rem_free(cstr)
-	return parseReminderJSON(C.GoString(cstr))
+	defer C.ek_rem_free(res.result)
+	return parseReminderJSON(C.GoString(res.result))
 }
 
 // UpdateReminder updates an existing reminder and returns the updated version.
@@ -143,12 +156,12 @@ func (c *Client) UpdateReminder(id string, input UpdateReminderInput) (*Reminder
 	cJSON := C.CString(jsonStr)
 	defer C.free(unsafe.Pointer(cJSON))
 
-	cstr := C.ek_rem_update_reminder(cID, cJSON)
-	if cstr == nil {
-		return nil, fmt.Errorf("reminders: %s", getLastError())
+	res := C.ek_rem_update_reminder(cID, cJSON)
+	if res.error != nil {
+		return nil, fmt.Errorf("reminders: %w", resultErr(res))
 	}
-	defer C.ek_rem_free(cstr)
-	return parseReminderJSON(C.GoString(cstr))
+	defer C.ek_rem_free(res.result)
+	return parseReminderJSON(C.GoString(res.result))
 }
 
 // DeleteReminder permanently deletes a reminder by ID.
@@ -157,11 +170,11 @@ func (c *Client) DeleteReminder(id string) error {
 	cID := C.CString(id)
 	defer C.free(unsafe.Pointer(cID))
 
-	cstr := C.ek_rem_delete_reminder(cID)
-	if cstr == nil {
-		return fmt.Errorf("reminders: %s", getLastError())
+	res := C.ek_rem_delete_reminder(cID)
+	if res.error != nil {
+		return fmt.Errorf("reminders: %w", resultErr(res))
 	}
-	defer C.ek_rem_free(cstr)
+	defer C.ek_rem_free(res.result)
 	return nil
 }
 
@@ -179,13 +192,13 @@ func (c *Client) CreateList(input CreateListInput) (*List, error) {
 	cJSON := C.CString(jsonStr)
 	defer C.free(unsafe.Pointer(cJSON))
 
-	cstr := C.ek_rem_create_list(cJSON)
-	if cstr == nil {
-		return nil, fmt.Errorf("reminders: %s", getLastError())
+	res := C.ek_rem_create_list(cJSON)
+	if res.error != nil {
+		return nil, fmt.Errorf("reminders: %w", resultErr(res))
 	}
-	defer C.ek_rem_free(cstr)
+	defer C.ek_rem_free(res.result)
 
-	jsonResp := C.GoString(cstr)
+	jsonResp := C.GoString(res.result)
 	lists, err := parseListsJSON("[" + jsonResp + "]")
 	if err != nil {
 		return nil, err
@@ -211,20 +224,20 @@ func (c *Client) UpdateList(id string, input UpdateListInput) (*List, error) {
 	cJSON := C.CString(jsonStr)
 	defer C.free(unsafe.Pointer(cJSON))
 
-	cstr := C.ek_rem_update_list(cID, cJSON)
-	if cstr == nil {
-		errMsg := getLastError()
-		if contains(errMsg, "not found") {
+	res := C.ek_rem_update_list(cID, cJSON)
+	if res.error != nil {
+		err := resultErr(res)
+		if containsLower(err.Error(), "not found") {
 			return nil, ErrNotFound
 		}
-		if contains(errMsg, "immutable") {
+		if containsLower(err.Error(), "immutable") {
 			return nil, ErrImmutable
 		}
-		return nil, fmt.Errorf("reminders: %s", errMsg)
+		return nil, fmt.Errorf("reminders: %w", err)
 	}
-	defer C.ek_rem_free(cstr)
+	defer C.ek_rem_free(res.result)
 
-	jsonResp := C.GoString(cstr)
+	jsonResp := C.GoString(res.result)
 	lists, err := parseListsJSON("[" + jsonResp + "]")
 	if err != nil {
 		return nil, err
@@ -242,24 +255,19 @@ func (c *Client) DeleteList(id string) error {
 	cID := C.CString(id)
 	defer C.free(unsafe.Pointer(cID))
 
-	cstr := C.ek_rem_delete_list(cID)
-	if cstr == nil {
-		errMsg := getLastError()
-		if contains(errMsg, "not found") {
+	res := C.ek_rem_delete_list(cID)
+	if res.error != nil {
+		err := resultErr(res)
+		if containsLower(err.Error(), "not found") {
 			return ErrNotFound
 		}
-		if contains(errMsg, "immutable") {
+		if containsLower(err.Error(), "immutable") {
 			return ErrImmutable
 		}
-		return fmt.Errorf("reminders: %s", errMsg)
+		return fmt.Errorf("reminders: %w", err)
 	}
-	defer C.ek_rem_free(cstr)
+	defer C.ek_rem_free(res.result)
 	return nil
-}
-
-// contains checks if s contains substr (case-insensitive).
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
 
 // CompleteReminder marks a reminder as completed and returns the updated version.
@@ -269,12 +277,12 @@ func (c *Client) CompleteReminder(id string) (*Reminder, error) {
 	cID := C.CString(id)
 	defer C.free(unsafe.Pointer(cID))
 
-	cstr := C.ek_rem_complete_reminder(cID)
-	if cstr == nil {
-		return nil, fmt.Errorf("reminders: %s", getLastError())
+	res := C.ek_rem_complete_reminder(cID)
+	if res.error != nil {
+		return nil, fmt.Errorf("reminders: %w", resultErr(res))
 	}
-	defer C.ek_rem_free(cstr)
-	return parseReminderJSON(C.GoString(cstr))
+	defer C.ek_rem_free(res.result)
+	return parseReminderJSON(C.GoString(res.result))
 }
 
 // UncompleteReminder marks a reminder as incomplete and returns the updated version.
@@ -284,20 +292,12 @@ func (c *Client) UncompleteReminder(id string) (*Reminder, error) {
 	cID := C.CString(id)
 	defer C.free(unsafe.Pointer(cID))
 
-	cstr := C.ek_rem_uncomplete_reminder(cID)
-	if cstr == nil {
-		return nil, fmt.Errorf("reminders: %s", getLastError())
+	res := C.ek_rem_uncomplete_reminder(cID)
+	if res.error != nil {
+		return nil, fmt.Errorf("reminders: %w", resultErr(res))
 	}
-	defer C.ek_rem_free(cstr)
-	return parseReminderJSON(C.GoString(cstr))
-}
-
-func getLastError() string {
-	cerr := C.ek_rem_last_error()
-	if cerr != nil {
-		return C.GoString(cerr)
-	}
-	return "unknown error"
+	defer C.ek_rem_free(res.result)
+	return parseReminderJSON(C.GoString(res.result))
 }
 
 // WatchChanges returns a channel that receives a value whenever the

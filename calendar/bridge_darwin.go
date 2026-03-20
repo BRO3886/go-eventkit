@@ -23,37 +23,43 @@ import (
 var calWatchMu sync.Mutex
 var calWatchActive bool
 
+func resultErr(res C.ek_result_t) error {
+	if res.error != nil {
+		msg := C.GoString(res.error)
+		C.ek_cal_free(res.error)
+		return errors.New(msg)
+	}
+	return errors.New("unknown error")
+}
+
 // New creates a new Calendar [Client] and requests calendar access.
 //
 // On first call, macOS displays a TCC prompt requesting calendar access.
 // Returns [ErrAccessDenied] if the user denies access.
 // Returns [ErrUnsupported] on non-darwin platforms.
 func New() (*Client, error) {
-	granted := C.ek_cal_request_access()
-	if granted == 0 {
-		cerr := C.ek_cal_last_error()
-		if cerr != nil {
-			msg := C.GoString(cerr)
-			if strings.Contains(msg, "denied") {
-				return nil, ErrAccessDenied
-			}
-			return nil, fmt.Errorf("calendar: %s", msg)
+	res := C.ek_cal_request_access()
+	if res.error != nil {
+		err := resultErr(res)
+		if strings.Contains(err.Error(), "denied") {
+			return nil, ErrAccessDenied
 		}
-		return nil, ErrAccessDenied
+		return nil, fmt.Errorf("calendar: %s", err)
 	}
+	C.ek_cal_free(res.result)
 	return &Client{}, nil
 }
 
 // Calendars returns all calendars for events across all accounts
 // (iCloud, Google, Exchange, local, subscribed, birthdays).
 func (c *Client) Calendars() ([]Calendar, error) {
-	cstr := C.ek_cal_fetch_calendars()
-	if cstr == nil {
-		return nil, getLastError("failed to fetch calendars")
+	res := C.ek_cal_fetch_calendars()
+	if res.error != nil {
+		return nil, fmt.Errorf("calendar: %w", resultErr(res))
 	}
-	defer C.ek_cal_free(cstr)
+	defer C.ek_cal_free(res.result)
 
-	jsonStr := C.GoString(cstr)
+	jsonStr := C.GoString(res.result)
 	return parseCalendarsJSON(jsonStr)
 }
 
@@ -83,13 +89,13 @@ func (c *Client) Events(start, end time.Time, opts ...ListOption) ([]Event, erro
 		defer C.free(unsafe.Pointer(cSearch))
 	}
 
-	cstr := C.ek_cal_fetch_events(cStart, cEnd, cCalID, cSearch)
-	if cstr == nil {
-		return nil, getLastError("failed to fetch events")
+	res := C.ek_cal_fetch_events(cStart, cEnd, cCalID, cSearch)
+	if res.error != nil {
+		return nil, fmt.Errorf("calendar: %w", resultErr(res))
 	}
-	defer C.ek_cal_free(cstr)
+	defer C.ek_cal_free(res.result)
 
-	jsonStr := C.GoString(cstr)
+	jsonStr := C.GoString(res.result)
 	return parseEventsJSON(jsonStr)
 }
 
@@ -99,17 +105,17 @@ func (c *Client) Event(id string) (*Event, error) {
 	cID := C.CString(id)
 	defer C.free(unsafe.Pointer(cID))
 
-	cstr := C.ek_cal_get_event(cID)
-	if cstr == nil {
-		err := getLastError("event not found: " + id)
+	res := C.ek_cal_get_event(cID)
+	if res.error != nil {
+		err := resultErr(res)
 		if strings.Contains(err.Error(), "not found") {
 			return nil, ErrNotFound
 		}
-		return nil, err
+		return nil, fmt.Errorf("calendar: %w", err)
 	}
-	defer C.ek_cal_free(cstr)
+	defer C.ek_cal_free(res.result)
 
-	jsonStr := C.GoString(cstr)
+	jsonStr := C.GoString(res.result)
 	return parseEventJSON(jsonStr)
 }
 
@@ -124,13 +130,13 @@ func (c *Client) CreateEvent(input CreateEventInput) (*Event, error) {
 	cJSON := C.CString(string(jsonBytes))
 	defer C.free(unsafe.Pointer(cJSON))
 
-	cstr := C.ek_cal_create_event(cJSON)
-	if cstr == nil {
-		return nil, getLastError("failed to create event")
+	res := C.ek_cal_create_event(cJSON)
+	if res.error != nil {
+		return nil, fmt.Errorf("calendar: %w", resultErr(res))
 	}
-	defer C.ek_cal_free(cstr)
+	defer C.ek_cal_free(res.result)
 
-	jsonStr := C.GoString(cstr)
+	jsonStr := C.GoString(res.result)
 	return parseEventJSON(jsonStr)
 }
 
@@ -149,17 +155,17 @@ func (c *Client) UpdateEvent(id string, input UpdateEventInput, span Span) (*Eve
 	cJSON := C.CString(string(jsonBytes))
 	defer C.free(unsafe.Pointer(cJSON))
 
-	cstr := C.ek_cal_update_event(cID, cJSON, C.int(span))
-	if cstr == nil {
-		err := getLastError("failed to update event: " + id)
+	res := C.ek_cal_update_event(cID, cJSON, C.int(span))
+	if res.error != nil {
+		err := resultErr(res)
 		if strings.Contains(err.Error(), "not found") {
 			return nil, ErrNotFound
 		}
-		return nil, err
+		return nil, fmt.Errorf("calendar: %w", err)
 	}
-	defer C.ek_cal_free(cstr)
+	defer C.ek_cal_free(res.result)
 
-	jsonStr := C.GoString(cstr)
+	jsonStr := C.GoString(res.result)
 	return parseEventJSON(jsonStr)
 }
 
@@ -171,15 +177,15 @@ func (c *Client) DeleteEvent(id string, span Span) error {
 	cID := C.CString(id)
 	defer C.free(unsafe.Pointer(cID))
 
-	cstr := C.ek_cal_delete_event(cID, C.int(span))
-	if cstr == nil {
-		err := getLastError("failed to delete event: " + id)
+	res := C.ek_cal_delete_event(cID, C.int(span))
+	if res.error != nil {
+		err := resultErr(res)
 		if strings.Contains(err.Error(), "not found") {
 			return ErrNotFound
 		}
-		return err
+		return fmt.Errorf("calendar: %w", err)
 	}
-	defer C.ek_cal_free(cstr)
+	C.ek_cal_free(res.result)
 	return nil
 }
 
@@ -197,13 +203,13 @@ func (c *Client) CreateCalendar(input CreateCalendarInput) (*Calendar, error) {
 	cJSON := C.CString(string(jsonBytes))
 	defer C.free(unsafe.Pointer(cJSON))
 
-	cstr := C.ek_cal_create_calendar(cJSON)
-	if cstr == nil {
-		return nil, getLastError("failed to create calendar")
+	res := C.ek_cal_create_calendar(cJSON)
+	if res.error != nil {
+		return nil, fmt.Errorf("calendar: %w", resultErr(res))
 	}
-	defer C.ek_cal_free(cstr)
+	defer C.ek_cal_free(res.result)
 
-	jsonStr := C.GoString(cstr)
+	jsonStr := C.GoString(res.result)
 	cals, err := parseCalendarsJSON("[" + jsonStr + "]")
 	if err != nil {
 		return nil, err
@@ -229,20 +235,20 @@ func (c *Client) UpdateCalendar(id string, input UpdateCalendarInput) (*Calendar
 	cJSON := C.CString(string(jsonBytes))
 	defer C.free(unsafe.Pointer(cJSON))
 
-	cstr := C.ek_cal_update_calendar(cID, cJSON)
-	if cstr == nil {
-		err := getLastError("failed to update calendar: " + id)
+	res := C.ek_cal_update_calendar(cID, cJSON)
+	if res.error != nil {
+		err := resultErr(res)
 		if strings.Contains(err.Error(), "not found") {
 			return nil, ErrNotFound
 		}
 		if strings.Contains(err.Error(), "immutable") {
 			return nil, ErrImmutable
 		}
-		return nil, err
+		return nil, fmt.Errorf("calendar: %w", err)
 	}
-	defer C.ek_cal_free(cstr)
+	defer C.ek_cal_free(res.result)
 
-	jsonStr := C.GoString(cstr)
+	jsonStr := C.GoString(res.result)
 	cals, err := parseCalendarsJSON("[" + jsonStr + "]")
 	if err != nil {
 		return nil, err
@@ -260,18 +266,18 @@ func (c *Client) DeleteCalendar(id string) error {
 	cID := C.CString(id)
 	defer C.free(unsafe.Pointer(cID))
 
-	cstr := C.ek_cal_delete_calendar(cID)
-	if cstr == nil {
-		err := getLastError("failed to delete calendar: " + id)
+	res := C.ek_cal_delete_calendar(cID)
+	if res.error != nil {
+		err := resultErr(res)
 		if strings.Contains(err.Error(), "not found") {
 			return ErrNotFound
 		}
 		if strings.Contains(err.Error(), "immutable") {
 			return ErrImmutable
 		}
-		return err
+		return fmt.Errorf("calendar: %w", err)
 	}
-	defer C.ek_cal_free(cstr)
+	C.ek_cal_free(res.result)
 	return nil
 }
 
@@ -329,13 +335,4 @@ func (c *Client) WatchChanges(ctx context.Context) (<-chan struct{}, error) {
 		}
 	}()
 	return ch, nil
-}
-
-// getLastError reads the last error from the ObjC bridge.
-func getLastError(fallback string) error {
-	cerr := C.ek_cal_last_error()
-	if cerr != nil {
-		return fmt.Errorf("calendar: %s", C.GoString(cerr))
-	}
-	return fmt.Errorf("calendar: %s", fallback)
 }

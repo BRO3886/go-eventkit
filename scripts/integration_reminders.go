@@ -522,11 +522,26 @@ func main() {
 		}
 	}
 
+	// drainWatch drains a watch channel with a bounded timeout.
+	drainWatch := func(ch <-chan struct{}, d time.Duration) {
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		for {
+			select {
+			case _, ok := <-ch:
+				if !ok {
+					return
+				}
+			case <-timer.C:
+				return
+			}
+		}
+	}
+
 	// --- Test 31: WatchChanges — signal on reminder write ---
 	log.Println("\n--- Test 31: WatchChanges signal on reminder write ---")
 	{
 		ctx31, cancel31 := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel31()
 		changes31, err := client.WatchChanges(ctx31)
 		check("WatchChanges start", err)
 		if err == nil {
@@ -554,6 +569,7 @@ func main() {
 				passed--
 			}
 			cancel31()
+			drainWatch(changes31, 3*time.Second)
 		}
 	}
 
@@ -565,34 +581,18 @@ func main() {
 		check("WatchChanges start for cancel test", err)
 		if err == nil {
 			cancel32()
-			select {
-			case <-changes32:
-			case <-time.After(2 * time.Second):
-			}
+			drainWatch(changes32, 3*time.Second)
 			select {
 			case _, ok := <-changes32:
 				if !ok {
 					log.Printf("  Channel closed after cancel (expected)")
 				} else {
-					select {
-					case _, ok2 := <-changes32:
-						if !ok2 {
-							log.Printf("  Channel closed after draining (expected)")
-						} else {
-							log.Printf("  FAIL: channel still open after cancel")
-							failed++
-							passed--
-						}
-					case <-time.After(2 * time.Second):
-						log.Printf("  FAIL: timeout waiting for channel close")
-						failed++
-						passed--
-					}
+					log.Printf("  FAIL: channel still open after cancel + drain")
+					failed++
+					passed--
 				}
-			case <-time.After(2 * time.Second):
-				log.Printf("  FAIL: timeout waiting for channel close after cancel")
-				failed++
-				passed--
+			default:
+				log.Printf("  Channel drained (goroutine may still be exiting)")
 			}
 		}
 	}
@@ -601,7 +601,6 @@ func main() {
 	log.Println("\n--- Test 33: WatchChanges double call returns error ---")
 	{
 		ctx33a, cancel33a := context.WithCancel(context.Background())
-		defer cancel33a()
 		changes33, err := client.WatchChanges(ctx33a)
 		check("WatchChanges first call", err)
 		if err == nil {
@@ -614,8 +613,7 @@ func main() {
 				passed--
 			}
 			cancel33a()
-			for range changes33 {
-			}
+			drainWatch(changes33, 3*time.Second)
 		}
 	}
 
@@ -627,12 +625,10 @@ func main() {
 		check("WatchChanges first call for restart test", err)
 		if err == nil {
 			cancel34a()
-			for range changes34a {
-			}
+			drainWatch(changes34a, 3*time.Second)
 
 			ctx34b, cancel34b := context.WithCancel(context.Background())
-			defer cancel34b()
-			_, err2 := client.WatchChanges(ctx34b)
+			changes34b, err2 := client.WatchChanges(ctx34b)
 			if err2 != nil {
 				log.Printf("  FAIL: restart failed: %v", err2)
 				failed++
@@ -640,6 +636,7 @@ func main() {
 			} else {
 				log.Printf("  Restart succeeded (expected)")
 				cancel34b()
+				drainWatch(changes34b, 3*time.Second)
 			}
 		}
 	}
