@@ -22,6 +22,17 @@ static EKEventStore* get_store(void) {
     return store;
 }
 
+// --- Serial dispatch queue for write serialization ---
+
+static dispatch_queue_t get_write_queue(void) {
+    static dispatch_queue_t q;
+    static dispatch_once_t token;
+    dispatch_once(&token, ^{
+        q = dispatch_queue_create("dev.sidv.eventkit.rem.writes", DISPATCH_QUEUE_SERIAL);
+    });
+    return q;
+}
+
 // --- Change notifications (self-pipe) ---
 
 static int ek_rem_watch_pipe[2] = {-1, -1};
@@ -455,223 +466,60 @@ ek_result_t ek_rem_get_reminder(const char* target_id) {
 }
 
 ek_result_t ek_rem_create_reminder(const char* json_input) {
-    @autoreleasepool {
-        ek_result_t res = {NULL, NULL};
-        if (!json_input) {
-            res.error = strdup([@"JSON input is required" UTF8String]);
-            return res;
-        }
-
-        EKEventStore* store = get_store();
-
-        // Parse JSON input.
-        NSData* data = [NSData dataWithBytes:json_input length:strlen(json_input)];
-        NSError* parseError = nil;
-        NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
-        if (!input) {
-            res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
-            return res;
-        }
-
-        EKReminder* reminder = [EKReminder reminderWithEventStore:store];
-
-        // Title (required).
-        reminder.title = input[@"title"] ?: @"";
-
-        // Notes.
-        if (input[@"notes"] && input[@"notes"] != [NSNull null]) {
-            reminder.notes = input[@"notes"];
-        }
-
-        // URL.
-        if (input[@"url"] && input[@"url"] != [NSNull null]) {
-            reminder.URL = [NSURL URLWithString:input[@"url"]];
-        }
-
-        // Priority.
-        if (input[@"priority"] && input[@"priority"] != [NSNull null]) {
-            reminder.priority = [input[@"priority"] integerValue];
-        }
-
-        // List (calendar).
-        if (input[@"listName"] && input[@"listName"] != [NSNull null]) {
-            NSString* listName = input[@"listName"];
-            EKCalendar* cal = find_list_by_name(store, listName);
-            if (!cal) {
-                res.error = strdup([[NSString stringWithFormat:@"list not found: %@", listName] UTF8String]);
-                return res;
+    __block ek_result_t res = {NULL, NULL};
+    dispatch_sync(get_write_queue(), ^{
+        @autoreleasepool {
+            if (!json_input) {
+                res.error = strdup([@"JSON input is required" UTF8String]);
+                return;
             }
-            reminder.calendar = cal;
-        } else {
-            reminder.calendar = [store defaultCalendarForNewReminders];
-        }
 
-        // Due date.
-        if (input[@"dueDate"] && input[@"dueDate"] != [NSNull null]) {
-            NSDate* dueDate = parse_iso_date([input[@"dueDate"] UTF8String]);
-            if (dueDate) {
-                NSCalendar* cal = [NSCalendar currentCalendar];
-                NSUInteger units = NSCalendarUnitYear | NSCalendarUnitMonth | NSCalendarUnitDay |
-                                   NSCalendarUnitHour | NSCalendarUnitMinute | NSCalendarUnitSecond;
-                reminder.dueDateComponents = [cal components:units fromDate:dueDate];
+            EKEventStore* store = get_store();
+
+            // Parse JSON input.
+            NSData* data = [NSData dataWithBytes:json_input length:strlen(json_input)];
+            NSError* parseError = nil;
+            NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
+            if (!input) {
+                res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
+                return;
             }
-        }
 
-        // Remind me date (alarm with absolute date).
-        if (input[@"remindMeDate"] && input[@"remindMeDate"] != [NSNull null]) {
-            NSDate* remindDate = parse_iso_date([input[@"remindMeDate"] UTF8String]);
-            if (remindDate) {
-                EKAlarm* alarm = [EKAlarm alarmWithAbsoluteDate:remindDate];
-                [reminder addAlarm:alarm];
-            }
-        }
+            EKReminder* reminder = [EKReminder reminderWithEventStore:store];
 
-        // Additional alarms.
-        if (input[@"alarms"] && input[@"alarms"] != [NSNull null]) {
-            NSArray* alarmInputs = input[@"alarms"];
-            for (NSDictionary* alarmInput in alarmInputs) {
-                if (alarmInput[@"absoluteDate"] && alarmInput[@"absoluteDate"] != [NSNull null]) {
-                    NSDate* absDate = parse_iso_date([alarmInput[@"absoluteDate"] UTF8String]);
-                    if (absDate) {
-                        [reminder addAlarm:[EKAlarm alarmWithAbsoluteDate:absDate]];
-                    }
-                } else if (alarmInput[@"relativeOffset"]) {
-                    double offset = [alarmInput[@"relativeOffset"] doubleValue];
-                    [reminder addAlarm:[EKAlarm alarmWithRelativeOffset:offset]];
-                }
-            }
-        }
+            // Title (required).
+            reminder.title = input[@"title"] ?: @"";
 
-        // Recurrence rules.
-        if (input[@"recurrenceRules"] && input[@"recurrenceRules"] != [NSNull null]) {
-            NSArray* ruleInputs = input[@"recurrenceRules"];
-            for (NSDictionary* ruleInput in ruleInputs) {
-                EKRecurrenceFrequency freq = [ruleInput[@"frequency"] integerValue];
-                NSInteger interval = [ruleInput[@"interval"] integerValue];
-                if (interval < 1) interval = 1;
-
-                NSMutableArray<EKRecurrenceDayOfWeek*>* daysOfWeek = nil;
-                if (ruleInput[@"daysOfTheWeek"] && ruleInput[@"daysOfTheWeek"] != [NSNull null]) {
-                    NSArray* dowInputs = ruleInput[@"daysOfTheWeek"];
-                    daysOfWeek = [NSMutableArray arrayWithCapacity:dowInputs.count];
-                    for (NSDictionary* dowInput in dowInputs) {
-                        EKWeekday weekday = [dowInput[@"dayOfTheWeek"] integerValue];
-                        NSInteger weekNum = [dowInput[@"weekNumber"] integerValue];
-                        if (weekNum != 0) {
-                            [daysOfWeek addObject:[EKRecurrenceDayOfWeek dayOfWeek:weekday weekNumber:weekNum]];
-                        } else {
-                            [daysOfWeek addObject:[EKRecurrenceDayOfWeek dayOfWeek:weekday]];
-                        }
-                    }
-                }
-
-                NSArray<NSNumber*>* daysOfMonth = ruleInput[@"daysOfTheMonth"];
-                if (daysOfMonth == (id)[NSNull null]) daysOfMonth = nil;
-                NSArray<NSNumber*>* monthsOfYear = ruleInput[@"monthsOfTheYear"];
-                if (monthsOfYear == (id)[NSNull null]) monthsOfYear = nil;
-                NSArray<NSNumber*>* weeksOfYear = ruleInput[@"weeksOfTheYear"];
-                if (weeksOfYear == (id)[NSNull null]) weeksOfYear = nil;
-                NSArray<NSNumber*>* daysOfYear = ruleInput[@"daysOfTheYear"];
-                if (daysOfYear == (id)[NSNull null]) daysOfYear = nil;
-                NSArray<NSNumber*>* setPositions = ruleInput[@"setPositions"];
-                if (setPositions == (id)[NSNull null]) setPositions = nil;
-
-                EKRecurrenceEnd* recEnd = nil;
-                NSDictionary* endInput = ruleInput[@"end"];
-                if (endInput && endInput != (id)[NSNull null]) {
-                    if (endInput[@"endDate"] && endInput[@"endDate"] != [NSNull null]) {
-                        NSDate* endDate = parse_iso_date([endInput[@"endDate"] UTF8String]);
-                        if (endDate) {
-                            recEnd = [EKRecurrenceEnd recurrenceEndWithEndDate:endDate];
-                        }
-                    } else if (endInput[@"occurrenceCount"] && [endInput[@"occurrenceCount"] integerValue] > 0) {
-                        recEnd = [EKRecurrenceEnd recurrenceEndWithOccurrenceCount:[endInput[@"occurrenceCount"] integerValue]];
-                    }
-                }
-
-                EKRecurrenceRule* rule = [[EKRecurrenceRule alloc]
-                    initRecurrenceWithFrequency:freq
-                                      interval:interval
-                                 daysOfTheWeek:daysOfWeek
-                                daysOfTheMonth:daysOfMonth
-                               monthsOfTheYear:monthsOfYear
-                                weeksOfTheYear:weeksOfYear
-                                 daysOfTheYear:daysOfYear
-                                  setPositions:setPositions
-                                           end:recEnd];
-                [reminder addRecurrenceRule:rule];
-            }
-        }
-
-        // Save via EventKit (no AppleScript!).
-        NSError* saveError = nil;
-        BOOL saved = [store saveReminder:reminder commit:YES error:&saveError];
-        if (!saved) {
-            res.error = strdup([[NSString stringWithFormat:@"failed to save reminder: %@",
-                saveError.localizedDescription] UTF8String]);
-            return res;
-        }
-
-        res.result = to_json(reminder_to_dict(reminder));
-        if (!res.result) res.error = strdup("JSON serialization failed");
-        return res;
-    }
-}
-
-ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_input) {
-    @autoreleasepool {
-        ek_result_t res = {NULL, NULL};
-        if (!reminder_id || !json_input) {
-            res.error = strdup([@"reminder ID and JSON input are required" UTF8String]);
-            return res;
-        }
-
-        EKEventStore* store = get_store();
-        EKReminder* reminder = find_reminder_by_id([NSString stringWithUTF8String:reminder_id]);
-        if (!reminder) {
-            res.error = strdup([[NSString stringWithFormat:@"reminder not found: %s", reminder_id] UTF8String]);
-            return res;
-        }
-
-        // Parse JSON input.
-        NSData* data = [NSData dataWithBytes:json_input length:strlen(json_input)];
-        NSError* parseError = nil;
-        NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
-        if (!input) {
-            res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
-            return res;
-        }
-
-        // Update fields that are present in input.
-        if (input[@"title"] && input[@"title"] != [NSNull null]) {
-            reminder.title = input[@"title"];
-        }
-        if (input[@"notes"] != nil) {
-            if (input[@"notes"] == [NSNull null]) {
-                reminder.notes = nil;
-            } else {
+            // Notes.
+            if (input[@"notes"] && input[@"notes"] != [NSNull null]) {
                 reminder.notes = input[@"notes"];
             }
-        }
-        if (input[@"url"] != nil) {
-            if (input[@"url"] == [NSNull null]) {
-                reminder.URL = nil;
-            } else {
+
+            // URL.
+            if (input[@"url"] && input[@"url"] != [NSNull null]) {
                 reminder.URL = [NSURL URLWithString:input[@"url"]];
             }
-        }
-        if (input[@"priority"] && input[@"priority"] != [NSNull null]) {
-            reminder.priority = [input[@"priority"] integerValue];
-        }
-        if (input[@"completed"] && input[@"completed"] != [NSNull null]) {
-            reminder.completed = [input[@"completed"] boolValue];
-        }
 
-        // Due date.
-        if ([input objectForKey:@"dueDate"]) {
-            if (input[@"dueDate"] == [NSNull null] || input[@"dueDate"] == nil) {
-                reminder.dueDateComponents = nil;
+            // Priority.
+            if (input[@"priority"] && input[@"priority"] != [NSNull null]) {
+                reminder.priority = [input[@"priority"] integerValue];
+            }
+
+            // List (calendar).
+            if (input[@"listName"] && input[@"listName"] != [NSNull null]) {
+                NSString* listName = input[@"listName"];
+                EKCalendar* cal = find_list_by_name(store, listName);
+                if (!cal) {
+                    res.error = strdup([[NSString stringWithFormat:@"list not found: %@", listName] UTF8String]);
+                    return;
+                }
+                reminder.calendar = cal;
             } else {
+                reminder.calendar = [store defaultCalendarForNewReminders];
+            }
+
+            // Due date.
+            if (input[@"dueDate"] && input[@"dueDate"] != [NSNull null]) {
                 NSDate* dueDate = parse_iso_date([input[@"dueDate"] UTF8String]);
                 if (dueDate) {
                     NSCalendar* cal = [NSCalendar currentCalendar];
@@ -680,26 +528,18 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
                     reminder.dueDateComponents = [cal components:units fromDate:dueDate];
                 }
             }
-        }
 
-        // Remind me date (replace first alarm with absolute date).
-        if (input[@"remindMeDate"] && input[@"remindMeDate"] != [NSNull null]) {
-            // Remove existing alarms.
-            for (EKAlarm* alarm in [reminder.alarms copy]) {
-                [reminder removeAlarm:alarm];
+            // Remind me date (alarm with absolute date).
+            if (input[@"remindMeDate"] && input[@"remindMeDate"] != [NSNull null]) {
+                NSDate* remindDate = parse_iso_date([input[@"remindMeDate"] UTF8String]);
+                if (remindDate) {
+                    EKAlarm* alarm = [EKAlarm alarmWithAbsoluteDate:remindDate];
+                    [reminder addAlarm:alarm];
+                }
             }
-            NSDate* remindDate = parse_iso_date([input[@"remindMeDate"] UTF8String]);
-            if (remindDate) {
-                [reminder addAlarm:[EKAlarm alarmWithAbsoluteDate:remindDate]];
-            }
-        }
 
-        // Alarms (replace all).
-        if (input[@"alarms"] != nil) {
-            for (EKAlarm* alarm in [reminder.alarms copy]) {
-                [reminder removeAlarm:alarm];
-            }
-            if (input[@"alarms"] != [NSNull null]) {
+            // Additional alarms.
+            if (input[@"alarms"] && input[@"alarms"] != [NSNull null]) {
                 NSArray* alarmInputs = input[@"alarms"];
                 for (NSDictionary* alarmInput in alarmInputs) {
                     if (alarmInput[@"absoluteDate"] && alarmInput[@"absoluteDate"] != [NSNull null]) {
@@ -713,15 +553,9 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
                     }
                 }
             }
-        }
 
-        // Recurrence rules (replace all).
-        if (input[@"recurrenceRules"] != nil) {
-            // Remove existing rules.
-            for (EKRecurrenceRule* rule in [reminder.recurrenceRules copy]) {
-                [reminder removeRecurrenceRule:rule];
-            }
-            if (input[@"recurrenceRules"] != [NSNull null]) {
+            // Recurrence rules.
+            if (input[@"recurrenceRules"] && input[@"recurrenceRules"] != [NSNull null]) {
                 NSArray* ruleInputs = input[@"recurrenceRules"];
                 for (NSDictionary* ruleInput in ruleInputs) {
                     EKRecurrenceFrequency freq = [ruleInput[@"frequency"] integerValue];
@@ -780,60 +614,243 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
                     [reminder addRecurrenceRule:rule];
                 }
             }
-        }
 
-        // Move to different list.
-        if (input[@"listName"] && input[@"listName"] != [NSNull null]) {
-            NSString* listName = input[@"listName"];
-            EKCalendar* cal = find_list_by_name(store, listName);
-            if (!cal) {
-                res.error = strdup([[NSString stringWithFormat:@"list not found: %@", listName] UTF8String]);
-                return res;
+            // Save via EventKit (no AppleScript!).
+            NSError* saveError = nil;
+            BOOL saved = [store saveReminder:reminder commit:YES error:&saveError];
+            if (!saved) {
+                res.error = strdup([[NSString stringWithFormat:@"failed to save reminder: %@",
+                    saveError.localizedDescription] UTF8String]);
+                return;
             }
-            reminder.calendar = cal;
-        }
 
-        // Save via EventKit.
-        NSError* saveError = nil;
-        BOOL saved = [store saveReminder:reminder commit:YES error:&saveError];
-        if (!saved) {
-            res.error = strdup([[NSString stringWithFormat:@"failed to update reminder: %@",
-                saveError.localizedDescription] UTF8String]);
-            return res;
+            res.result = to_json(reminder_to_dict(reminder));
+            if (!res.result) res.error = strdup("JSON serialization failed");
         }
+    });
+    return res;
+}
 
-        res.result = to_json(reminder_to_dict(reminder));
-        if (!res.result) res.error = strdup("JSON serialization failed");
-        return res;
-    }
+ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_input) {
+    __block ek_result_t res = {NULL, NULL};
+    dispatch_sync(get_write_queue(), ^{
+        @autoreleasepool {
+            if (!reminder_id || !json_input) {
+                res.error = strdup([@"reminder ID and JSON input are required" UTF8String]);
+                return;
+            }
+
+            EKEventStore* store = get_store();
+            EKReminder* reminder = find_reminder_by_id([NSString stringWithUTF8String:reminder_id]);
+            if (!reminder) {
+                res.error = strdup([[NSString stringWithFormat:@"reminder not found: %s", reminder_id] UTF8String]);
+                return;
+            }
+
+            // Parse JSON input.
+            NSData* data = [NSData dataWithBytes:json_input length:strlen(json_input)];
+            NSError* parseError = nil;
+            NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
+            if (!input) {
+                res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
+                return;
+            }
+
+            // Update fields that are present in input.
+            if (input[@"title"] && input[@"title"] != [NSNull null]) {
+                reminder.title = input[@"title"];
+            }
+            if (input[@"notes"] != nil) {
+                if (input[@"notes"] == [NSNull null]) {
+                    reminder.notes = nil;
+                } else {
+                    reminder.notes = input[@"notes"];
+                }
+            }
+            if (input[@"url"] != nil) {
+                if (input[@"url"] == [NSNull null]) {
+                    reminder.URL = nil;
+                } else {
+                    reminder.URL = [NSURL URLWithString:input[@"url"]];
+                }
+            }
+            if (input[@"priority"] && input[@"priority"] != [NSNull null]) {
+                reminder.priority = [input[@"priority"] integerValue];
+            }
+            if (input[@"completed"] && input[@"completed"] != [NSNull null]) {
+                reminder.completed = [input[@"completed"] boolValue];
+            }
+
+            // Due date.
+            if ([input objectForKey:@"dueDate"]) {
+                if (input[@"dueDate"] == [NSNull null] || input[@"dueDate"] == nil) {
+                    reminder.dueDateComponents = nil;
+                } else {
+                    NSDate* dueDate = parse_iso_date([input[@"dueDate"] UTF8String]);
+                    if (dueDate) {
+                        NSCalendar* cal = [NSCalendar currentCalendar];
+                        NSUInteger units = NSCalendarUnitYear | NSCalendarUnitMonth | NSCalendarUnitDay |
+                                           NSCalendarUnitHour | NSCalendarUnitMinute | NSCalendarUnitSecond;
+                        reminder.dueDateComponents = [cal components:units fromDate:dueDate];
+                    }
+                }
+            }
+
+            // Remind me date (replace first alarm with absolute date).
+            if (input[@"remindMeDate"] && input[@"remindMeDate"] != [NSNull null]) {
+                // Remove existing alarms.
+                for (EKAlarm* alarm in [reminder.alarms copy]) {
+                    [reminder removeAlarm:alarm];
+                }
+                NSDate* remindDate = parse_iso_date([input[@"remindMeDate"] UTF8String]);
+                if (remindDate) {
+                    [reminder addAlarm:[EKAlarm alarmWithAbsoluteDate:remindDate]];
+                }
+            }
+
+            // Alarms (replace all).
+            if (input[@"alarms"] != nil) {
+                for (EKAlarm* alarm in [reminder.alarms copy]) {
+                    [reminder removeAlarm:alarm];
+                }
+                if (input[@"alarms"] != [NSNull null]) {
+                    NSArray* alarmInputs = input[@"alarms"];
+                    for (NSDictionary* alarmInput in alarmInputs) {
+                        if (alarmInput[@"absoluteDate"] && alarmInput[@"absoluteDate"] != [NSNull null]) {
+                            NSDate* absDate = parse_iso_date([alarmInput[@"absoluteDate"] UTF8String]);
+                            if (absDate) {
+                                [reminder addAlarm:[EKAlarm alarmWithAbsoluteDate:absDate]];
+                            }
+                        } else if (alarmInput[@"relativeOffset"]) {
+                            double offset = [alarmInput[@"relativeOffset"] doubleValue];
+                            [reminder addAlarm:[EKAlarm alarmWithRelativeOffset:offset]];
+                        }
+                    }
+                }
+            }
+
+            // Recurrence rules (replace all).
+            if (input[@"recurrenceRules"] != nil) {
+                // Remove existing rules.
+                for (EKRecurrenceRule* rule in [reminder.recurrenceRules copy]) {
+                    [reminder removeRecurrenceRule:rule];
+                }
+                if (input[@"recurrenceRules"] != [NSNull null]) {
+                    NSArray* ruleInputs = input[@"recurrenceRules"];
+                    for (NSDictionary* ruleInput in ruleInputs) {
+                        EKRecurrenceFrequency freq = [ruleInput[@"frequency"] integerValue];
+                        NSInteger interval = [ruleInput[@"interval"] integerValue];
+                        if (interval < 1) interval = 1;
+
+                        NSMutableArray<EKRecurrenceDayOfWeek*>* daysOfWeek = nil;
+                        if (ruleInput[@"daysOfTheWeek"] && ruleInput[@"daysOfTheWeek"] != [NSNull null]) {
+                            NSArray* dowInputs = ruleInput[@"daysOfTheWeek"];
+                            daysOfWeek = [NSMutableArray arrayWithCapacity:dowInputs.count];
+                            for (NSDictionary* dowInput in dowInputs) {
+                                EKWeekday weekday = [dowInput[@"dayOfTheWeek"] integerValue];
+                                NSInteger weekNum = [dowInput[@"weekNumber"] integerValue];
+                                if (weekNum != 0) {
+                                    [daysOfWeek addObject:[EKRecurrenceDayOfWeek dayOfWeek:weekday weekNumber:weekNum]];
+                                } else {
+                                    [daysOfWeek addObject:[EKRecurrenceDayOfWeek dayOfWeek:weekday]];
+                                }
+                            }
+                        }
+
+                        NSArray<NSNumber*>* daysOfMonth = ruleInput[@"daysOfTheMonth"];
+                        if (daysOfMonth == (id)[NSNull null]) daysOfMonth = nil;
+                        NSArray<NSNumber*>* monthsOfYear = ruleInput[@"monthsOfTheYear"];
+                        if (monthsOfYear == (id)[NSNull null]) monthsOfYear = nil;
+                        NSArray<NSNumber*>* weeksOfYear = ruleInput[@"weeksOfTheYear"];
+                        if (weeksOfYear == (id)[NSNull null]) weeksOfYear = nil;
+                        NSArray<NSNumber*>* daysOfYear = ruleInput[@"daysOfTheYear"];
+                        if (daysOfYear == (id)[NSNull null]) daysOfYear = nil;
+                        NSArray<NSNumber*>* setPositions = ruleInput[@"setPositions"];
+                        if (setPositions == (id)[NSNull null]) setPositions = nil;
+
+                        EKRecurrenceEnd* recEnd = nil;
+                        NSDictionary* endInput = ruleInput[@"end"];
+                        if (endInput && endInput != (id)[NSNull null]) {
+                            if (endInput[@"endDate"] && endInput[@"endDate"] != [NSNull null]) {
+                                NSDate* endDate = parse_iso_date([endInput[@"endDate"] UTF8String]);
+                                if (endDate) {
+                                    recEnd = [EKRecurrenceEnd recurrenceEndWithEndDate:endDate];
+                                }
+                            } else if (endInput[@"occurrenceCount"] && [endInput[@"occurrenceCount"] integerValue] > 0) {
+                                recEnd = [EKRecurrenceEnd recurrenceEndWithOccurrenceCount:[endInput[@"occurrenceCount"] integerValue]];
+                            }
+                        }
+
+                        EKRecurrenceRule* rule = [[EKRecurrenceRule alloc]
+                            initRecurrenceWithFrequency:freq
+                                              interval:interval
+                                         daysOfTheWeek:daysOfWeek
+                                        daysOfTheMonth:daysOfMonth
+                                       monthsOfTheYear:monthsOfYear
+                                        weeksOfTheYear:weeksOfYear
+                                         daysOfTheYear:daysOfYear
+                                          setPositions:setPositions
+                                                   end:recEnd];
+                        [reminder addRecurrenceRule:rule];
+                    }
+                }
+            }
+
+            // Move to different list.
+            if (input[@"listName"] && input[@"listName"] != [NSNull null]) {
+                NSString* listName = input[@"listName"];
+                EKCalendar* cal = find_list_by_name(store, listName);
+                if (!cal) {
+                    res.error = strdup([[NSString stringWithFormat:@"list not found: %@", listName] UTF8String]);
+                    return;
+                }
+                reminder.calendar = cal;
+            }
+
+            // Save via EventKit.
+            NSError* saveError = nil;
+            BOOL saved = [store saveReminder:reminder commit:YES error:&saveError];
+            if (!saved) {
+                res.error = strdup([[NSString stringWithFormat:@"failed to update reminder: %@",
+                    saveError.localizedDescription] UTF8String]);
+                return;
+            }
+
+            res.result = to_json(reminder_to_dict(reminder));
+            if (!res.result) res.error = strdup("JSON serialization failed");
+        }
+    });
+    return res;
 }
 
 ek_result_t ek_rem_delete_reminder(const char* reminder_id) {
-    @autoreleasepool {
-        ek_result_t res = {NULL, NULL};
-        if (!reminder_id) {
-            res.error = strdup([@"reminder ID is required" UTF8String]);
-            return res;
-        }
+    __block ek_result_t res = {NULL, NULL};
+    dispatch_sync(get_write_queue(), ^{
+        @autoreleasepool {
+            if (!reminder_id) {
+                res.error = strdup([@"reminder ID is required" UTF8String]);
+                return;
+            }
 
-        EKEventStore* store = get_store();
-        EKReminder* reminder = find_reminder_by_id([NSString stringWithUTF8String:reminder_id]);
-        if (!reminder) {
-            res.error = strdup([[NSString stringWithFormat:@"reminder not found: %s", reminder_id] UTF8String]);
-            return res;
-        }
+            EKEventStore* store = get_store();
+            EKReminder* reminder = find_reminder_by_id([NSString stringWithUTF8String:reminder_id]);
+            if (!reminder) {
+                res.error = strdup([[NSString stringWithFormat:@"reminder not found: %s", reminder_id] UTF8String]);
+                return;
+            }
 
-        NSError* removeError = nil;
-        BOOL removed = [store removeReminder:reminder commit:YES error:&removeError];
-        if (!removed) {
-            res.error = strdup([[NSString stringWithFormat:@"failed to delete reminder: %@",
-                removeError.localizedDescription] UTF8String]);
-            return res;
-        }
+            NSError* removeError = nil;
+            BOOL removed = [store removeReminder:reminder commit:YES error:&removeError];
+            if (!removed) {
+                res.error = strdup([[NSString stringWithFormat:@"failed to delete reminder: %@",
+                    removeError.localizedDescription] UTF8String]);
+                return;
+            }
 
-        res.result = strdup("ok");
-        return res;
-    }
+            res.result = strdup("ok");
+        }
+    });
+    return res;
 }
 
 // --- Find source by name (case-insensitive) ---
@@ -894,219 +911,229 @@ static CGColorRef parse_hex_color(NSString* hex) {
 // --- List CRUD ---
 
 ek_result_t ek_rem_create_list(const char* json_input) {
-    @autoreleasepool {
-        ek_result_t res = {NULL, NULL};
-        if (!json_input) {
-            res.error = strdup([@"JSON input is required" UTF8String]);
-            return res;
-        }
-
-        EKEventStore* store = get_store();
-
-        // Parse JSON input.
-        NSData* data = [NSData dataWithBytes:json_input length:strlen(json_input)];
-        NSError* parseError = nil;
-        NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
-        if (!input) {
-            res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
-            return res;
-        }
-
-        EKCalendar* cal = [EKCalendar calendarForEntityType:EKEntityTypeReminder eventStore:store];
-
-        // Title (required).
-        cal.title = input[@"title"] ?: @"";
-
-        // Source (required — validated in Go layer).
-        EKSource* source = find_source_by_name(store, input[@"source"]);
-        if (!source) {
-            res.error = strdup([[NSString stringWithFormat:@"source not found: %@", input[@"source"]] UTF8String]);
-            return res;
-        }
-        cal.source = source;
-
-        // Color.
-        if (input[@"color"] && input[@"color"] != [NSNull null] && [input[@"color"] length] > 0) {
-            CGColorRef color = parse_hex_color(input[@"color"]);
-            if (color) {
-                cal.CGColor = color;
-                CGColorRelease(color);
+    __block ek_result_t res = {NULL, NULL};
+    dispatch_sync(get_write_queue(), ^{
+        @autoreleasepool {
+            if (!json_input) {
+                res.error = strdup([@"JSON input is required" UTF8String]);
+                return;
             }
-        }
 
-        // Save.
-        NSError* saveError = nil;
-        BOOL saved = [store saveCalendar:cal commit:YES error:&saveError];
-        if (!saved) {
-            res.error = strdup([[NSString stringWithFormat:@"failed to save list: %@",
-                saveError.localizedDescription] UTF8String]);
-            return res;
-        }
+            EKEventStore* store = get_store();
 
-        // Count is 0 for a newly created list.
-        res.result = to_json(list_to_dict(cal, 0));
-        if (!res.result) res.error = strdup("JSON serialization failed");
-        return res;
-    }
+            // Parse JSON input.
+            NSData* data = [NSData dataWithBytes:json_input length:strlen(json_input)];
+            NSError* parseError = nil;
+            NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
+            if (!input) {
+                res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
+                return;
+            }
+
+            EKCalendar* cal = [EKCalendar calendarForEntityType:EKEntityTypeReminder eventStore:store];
+
+            // Title (required).
+            cal.title = input[@"title"] ?: @"";
+
+            // Source (required — validated in Go layer).
+            EKSource* source = find_source_by_name(store, input[@"source"]);
+            if (!source) {
+                res.error = strdup([[NSString stringWithFormat:@"source not found: %@", input[@"source"]] UTF8String]);
+                return;
+            }
+            cal.source = source;
+
+            // Color.
+            if (input[@"color"] && input[@"color"] != [NSNull null] && [input[@"color"] length] > 0) {
+                CGColorRef color = parse_hex_color(input[@"color"]);
+                if (color) {
+                    cal.CGColor = color;
+                    CGColorRelease(color);
+                }
+            }
+
+            // Save.
+            NSError* saveError = nil;
+            BOOL saved = [store saveCalendar:cal commit:YES error:&saveError];
+            if (!saved) {
+                res.error = strdup([[NSString stringWithFormat:@"failed to save list: %@",
+                    saveError.localizedDescription] UTF8String]);
+                return;
+            }
+
+            // Count is 0 for a newly created list.
+            res.result = to_json(list_to_dict(cal, 0));
+            if (!res.result) res.error = strdup("JSON serialization failed");
+        }
+    });
+    return res;
 }
 
 ek_result_t ek_rem_update_list(const char* list_id, const char* json_input) {
-    @autoreleasepool {
-        ek_result_t res = {NULL, NULL};
-        if (!list_id || !json_input) {
-            res.error = strdup([@"list ID and JSON input are required" UTF8String]);
-            return res;
-        }
-
-        EKEventStore* store = get_store();
-        NSString* listIdStr = [NSString stringWithUTF8String:list_id];
-
-        EKCalendar* cal = find_list_by_id(store, listIdStr);
-        if (!cal) {
-            res.error = strdup([[NSString stringWithFormat:@"list not found: %s", list_id] UTF8String]);
-            return res;
-        }
-
-        // Check immutability.
-        if (cal.isImmutable) {
-            res.error = strdup([[NSString stringWithFormat:@"list is immutable: %@", cal.title] UTF8String]);
-            return res;
-        }
-
-        // Parse JSON input.
-        NSData* data = [NSData dataWithBytes:json_input length:strlen(json_input)];
-        NSError* parseError = nil;
-        NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
-        if (!input) {
-            res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
-            return res;
-        }
-
-        // Update title.
-        if (input[@"title"] && input[@"title"] != [NSNull null]) {
-            cal.title = input[@"title"];
-        }
-
-        // Update color.
-        if (input[@"color"] && input[@"color"] != [NSNull null]) {
-            CGColorRef color = parse_hex_color(input[@"color"]);
-            if (color) {
-                cal.CGColor = color;
-                CGColorRelease(color);
+    __block ek_result_t res = {NULL, NULL};
+    dispatch_sync(get_write_queue(), ^{
+        @autoreleasepool {
+            if (!list_id || !json_input) {
+                res.error = strdup([@"list ID and JSON input are required" UTF8String]);
+                return;
             }
-        }
 
-        // Save.
-        NSError* saveError = nil;
-        BOOL saved = [store saveCalendar:cal commit:YES error:&saveError];
-        if (!saved) {
-            res.error = strdup([[NSString stringWithFormat:@"failed to update list: %@",
-                saveError.localizedDescription] UTF8String]);
-            return res;
-        }
+            EKEventStore* store = get_store();
+            NSString* listIdStr = [NSString stringWithUTF8String:list_id];
 
-        // Get updated reminder count.
-        NSArray<EKReminder*>* reminders = fetch_all_reminders(@[cal]);
-        res.result = to_json(list_to_dict(cal, (int)reminders.count));
-        if (!res.result) res.error = strdup("JSON serialization failed");
-        return res;
-    }
+            EKCalendar* cal = find_list_by_id(store, listIdStr);
+            if (!cal) {
+                res.error = strdup([[NSString stringWithFormat:@"list not found: %s", list_id] UTF8String]);
+                return;
+            }
+
+            // Check immutability.
+            if (cal.isImmutable) {
+                res.error = strdup([[NSString stringWithFormat:@"list is immutable: %@", cal.title] UTF8String]);
+                return;
+            }
+
+            // Parse JSON input.
+            NSData* data = [NSData dataWithBytes:json_input length:strlen(json_input)];
+            NSError* parseError = nil;
+            NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
+            if (!input) {
+                res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
+                return;
+            }
+
+            // Update title.
+            if (input[@"title"] && input[@"title"] != [NSNull null]) {
+                cal.title = input[@"title"];
+            }
+
+            // Update color.
+            if (input[@"color"] && input[@"color"] != [NSNull null]) {
+                CGColorRef color = parse_hex_color(input[@"color"]);
+                if (color) {
+                    cal.CGColor = color;
+                    CGColorRelease(color);
+                }
+            }
+
+            // Save.
+            NSError* saveError = nil;
+            BOOL saved = [store saveCalendar:cal commit:YES error:&saveError];
+            if (!saved) {
+                res.error = strdup([[NSString stringWithFormat:@"failed to update list: %@",
+                    saveError.localizedDescription] UTF8String]);
+                return;
+            }
+
+            // Get updated reminder count.
+            NSArray<EKReminder*>* reminders = fetch_all_reminders(@[cal]);
+            res.result = to_json(list_to_dict(cal, (int)reminders.count));
+            if (!res.result) res.error = strdup("JSON serialization failed");
+        }
+    });
+    return res;
 }
 
 ek_result_t ek_rem_delete_list(const char* list_id) {
-    @autoreleasepool {
-        ek_result_t res = {NULL, NULL};
-        if (!list_id) {
-            res.error = strdup([@"list ID is required" UTF8String]);
-            return res;
+    __block ek_result_t res = {NULL, NULL};
+    dispatch_sync(get_write_queue(), ^{
+        @autoreleasepool {
+            if (!list_id) {
+                res.error = strdup([@"list ID is required" UTF8String]);
+                return;
+            }
+
+            EKEventStore* store = get_store();
+            NSString* listIdStr = [NSString stringWithUTF8String:list_id];
+
+            EKCalendar* cal = find_list_by_id(store, listIdStr);
+            if (!cal) {
+                res.error = strdup([[NSString stringWithFormat:@"list not found: %s", list_id] UTF8String]);
+                return;
+            }
+
+            // Check immutability.
+            if (cal.isImmutable) {
+                res.error = strdup([[NSString stringWithFormat:@"list is immutable: %@", cal.title] UTF8String]);
+                return;
+            }
+
+            NSError* removeError = nil;
+            BOOL removed = [store removeCalendar:cal commit:YES error:&removeError];
+            if (!removed) {
+                res.error = strdup([[NSString stringWithFormat:@"failed to delete list: %@",
+                    removeError.localizedDescription] UTF8String]);
+                return;
+            }
+
+            res.result = strdup("ok");
         }
-
-        EKEventStore* store = get_store();
-        NSString* listIdStr = [NSString stringWithUTF8String:list_id];
-
-        EKCalendar* cal = find_list_by_id(store, listIdStr);
-        if (!cal) {
-            res.error = strdup([[NSString stringWithFormat:@"list not found: %s", list_id] UTF8String]);
-            return res;
-        }
-
-        // Check immutability.
-        if (cal.isImmutable) {
-            res.error = strdup([[NSString stringWithFormat:@"list is immutable: %@", cal.title] UTF8String]);
-            return res;
-        }
-
-        NSError* removeError = nil;
-        BOOL removed = [store removeCalendar:cal commit:YES error:&removeError];
-        if (!removed) {
-            res.error = strdup([[NSString stringWithFormat:@"failed to delete list: %@",
-                removeError.localizedDescription] UTF8String]);
-            return res;
-        }
-
-        res.result = strdup("ok");
-        return res;
-    }
+    });
+    return res;
 }
 
 ek_result_t ek_rem_complete_reminder(const char* reminder_id) {
-    @autoreleasepool {
-        ek_result_t res = {NULL, NULL};
-        if (!reminder_id) {
-            res.error = strdup([@"reminder ID is required" UTF8String]);
-            return res;
+    __block ek_result_t res = {NULL, NULL};
+    dispatch_sync(get_write_queue(), ^{
+        @autoreleasepool {
+            if (!reminder_id) {
+                res.error = strdup([@"reminder ID is required" UTF8String]);
+                return;
+            }
+
+            EKEventStore* store = get_store();
+            EKReminder* reminder = find_reminder_by_id([NSString stringWithUTF8String:reminder_id]);
+            if (!reminder) {
+                res.error = strdup([[NSString stringWithFormat:@"reminder not found: %s", reminder_id] UTF8String]);
+                return;
+            }
+
+            reminder.completed = YES;
+
+            NSError* saveError = nil;
+            BOOL saved = [store saveReminder:reminder commit:YES error:&saveError];
+            if (!saved) {
+                res.error = strdup([[NSString stringWithFormat:@"failed to complete reminder: %@",
+                    saveError.localizedDescription] UTF8String]);
+                return;
+            }
+
+            res.result = to_json(reminder_to_dict(reminder));
+            if (!res.result) res.error = strdup("JSON serialization failed");
         }
-
-        EKEventStore* store = get_store();
-        EKReminder* reminder = find_reminder_by_id([NSString stringWithUTF8String:reminder_id]);
-        if (!reminder) {
-            res.error = strdup([[NSString stringWithFormat:@"reminder not found: %s", reminder_id] UTF8String]);
-            return res;
-        }
-
-        reminder.completed = YES;
-
-        NSError* saveError = nil;
-        BOOL saved = [store saveReminder:reminder commit:YES error:&saveError];
-        if (!saved) {
-            res.error = strdup([[NSString stringWithFormat:@"failed to complete reminder: %@",
-                saveError.localizedDescription] UTF8String]);
-            return res;
-        }
-
-        res.result = to_json(reminder_to_dict(reminder));
-        if (!res.result) res.error = strdup("JSON serialization failed");
-        return res;
-    }
+    });
+    return res;
 }
 
 ek_result_t ek_rem_uncomplete_reminder(const char* reminder_id) {
-    @autoreleasepool {
-        ek_result_t res = {NULL, NULL};
-        if (!reminder_id) {
-            res.error = strdup([@"reminder ID is required" UTF8String]);
-            return res;
+    __block ek_result_t res = {NULL, NULL};
+    dispatch_sync(get_write_queue(), ^{
+        @autoreleasepool {
+            if (!reminder_id) {
+                res.error = strdup([@"reminder ID is required" UTF8String]);
+                return;
+            }
+
+            EKEventStore* store = get_store();
+            EKReminder* reminder = find_reminder_by_id([NSString stringWithUTF8String:reminder_id]);
+            if (!reminder) {
+                res.error = strdup([[NSString stringWithFormat:@"reminder not found: %s", reminder_id] UTF8String]);
+                return;
+            }
+
+            reminder.completed = NO;
+
+            NSError* saveError = nil;
+            BOOL saved = [store saveReminder:reminder commit:YES error:&saveError];
+            if (!saved) {
+                res.error = strdup([[NSString stringWithFormat:@"failed to uncomplete reminder: %@",
+                    saveError.localizedDescription] UTF8String]);
+                return;
+            }
+
+            res.result = to_json(reminder_to_dict(reminder));
+            if (!res.result) res.error = strdup("JSON serialization failed");
         }
-
-        EKEventStore* store = get_store();
-        EKReminder* reminder = find_reminder_by_id([NSString stringWithUTF8String:reminder_id]);
-        if (!reminder) {
-            res.error = strdup([[NSString stringWithFormat:@"reminder not found: %s", reminder_id] UTF8String]);
-            return res;
-        }
-
-        reminder.completed = NO;
-
-        NSError* saveError = nil;
-        BOOL saved = [store saveReminder:reminder commit:YES error:&saveError];
-        if (!saved) {
-            res.error = strdup([[NSString stringWithFormat:@"failed to uncomplete reminder: %@",
-                saveError.localizedDescription] UTF8String]);
-            return res;
-        }
-
-        res.result = to_json(reminder_to_dict(reminder));
-        if (!res.result) res.error = strdup("JSON serialization failed");
-        return res;
-    }
+    });
+    return res;
 }
