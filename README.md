@@ -24,6 +24,7 @@ No AppleScript. No subprocesses. Direct EventKit access via cgo, with an idiomat
 - **Change notifications** — `WatchChanges(ctx)` delivers a signal on any EventKit database change (iCloud sync, other apps, own writes) via a Go channel
 - **Date parsing** — Shared natural language date parser (`dateparser/`) with support for "tomorrow 2pm", "next friday", "in 3 hours", "eow", ISO 8601, and more
 - **All accounts** — Sees iCloud, Google, Exchange, subscribed, and local calendars/reminders
+- **Concurrency safe** — Write operations serialized via dispatch queue, inline error returns (no thread-local storage), safe for use from multiple goroutines
 - **Pure Go API** — Idiomatic types, no cgo leaking to consumers
 - **Cross-platform safe** — Types importable everywhere, bridge returns `ErrUnsupported` on non-darwin
 

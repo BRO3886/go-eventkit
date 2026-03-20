@@ -23,6 +23,17 @@ static EKEventStore* get_store(void) {
     return store;
 }
 
+// --- Serial dispatch queue for write serialization ---
+
+static dispatch_queue_t get_write_queue(void) {
+    static dispatch_queue_t q;
+    static dispatch_once_t token;
+    dispatch_once(&token, ^{
+        q = dispatch_queue_create("dev.sidv.eventkit.cal.writes", DISPATCH_QUEUE_SERIAL);
+    });
+    return q;
+}
+
 // --- Change notifications (self-pipe) ---
 
 static int ek_watch_pipe[2] = {-1, -1};
@@ -500,273 +511,76 @@ ek_result_t ek_cal_get_event(const char* event_id) {
 }
 
 ek_result_t ek_cal_create_event(const char* json_input) {
-    @autoreleasepool {
-        ek_result_t res = {NULL, NULL};
-        if (!json_input) {
-            res.error = strdup([@"JSON input is required" UTF8String]);
-            return res;
-        }
-
-        EKEventStore* store = get_store();
-
-        // Parse JSON input.
-        NSData* data = [NSData dataWithBytes:json_input length:strlen(json_input)];
-        NSError* parseError = nil;
-        NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
-        if (!input) {
-            res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
-            return res;
-        }
-
-        EKEvent* event = [EKEvent eventWithEventStore:store];
-
-        // Required fields.
-        event.title = input[@"title"] ?: @"";
-
-        NSDate* startDate = parse_iso_date([input[@"startDate"] UTF8String]);
-        NSDate* endDate = parse_iso_date([input[@"endDate"] UTF8String]);
-        if (!startDate || !endDate) {
-            res.error = strdup([@"startDate and endDate are required" UTF8String]);
-            return res;
-        }
-        event.startDate = startDate;
-        event.endDate = endDate;
-
-        // Optional fields.
-        if (input[@"allDay"] && input[@"allDay"] != [NSNull null]) {
-            event.allDay = [input[@"allDay"] boolValue];
-        }
-        if (input[@"location"] && input[@"location"] != [NSNull null]) {
-            event.location = input[@"location"];
-        }
-        if (input[@"notes"] && input[@"notes"] != [NSNull null]) {
-            event.notes = input[@"notes"];
-        }
-        if (input[@"url"] && input[@"url"] != [NSNull null]) {
-            event.URL = [NSURL URLWithString:input[@"url"]];
-        }
-
-        // TimeZone support.
-        if (input[@"timeZone"] && input[@"timeZone"] != [NSNull null]) {
-            NSTimeZone* tz = [NSTimeZone timeZoneWithName:input[@"timeZone"]];
-            if (tz) {
-                event.timeZone = tz;
+    __block ek_result_t res = {NULL, NULL};
+    dispatch_sync(get_write_queue(), ^{
+        @autoreleasepool {
+            if (!json_input) {
+                res.error = strdup([@"JSON input is required" UTF8String]);
+                return;
             }
-        }
 
-        // Calendar.
-        if (input[@"calendar"] && input[@"calendar"] != [NSNull null]) {
-            NSString* calName = input[@"calendar"];
-            EKCalendar* cal = find_calendar_by_name(store, calName);
-            if (!cal) {
-                res.error = strdup([[NSString stringWithFormat:@"calendar not found: %@", calName] UTF8String]);
-                return res;
+            EKEventStore* store = get_store();
+
+            // Parse JSON input.
+            NSData* data = [NSData dataWithBytes:json_input length:strlen(json_input)];
+            NSError* parseError = nil;
+            NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
+            if (!input) {
+                res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
+                return;
             }
-            event.calendar = cal;
-        } else {
-            event.calendar = [store defaultCalendarForNewEvents];
-        }
 
-        // Alerts.
-        if (input[@"alerts"] && input[@"alerts"] != [NSNull null]) {
-            NSArray* alertInputs = input[@"alerts"];
-            for (NSDictionary* alertInput in alertInputs) {
-                double offset = [alertInput[@"relativeOffset"] doubleValue];
-                EKAlarm* alarm = [EKAlarm alarmWithRelativeOffset:offset];
-                [event addAlarm:alarm];
+            EKEvent* event = [EKEvent eventWithEventStore:store];
+
+            // Required fields.
+            event.title = input[@"title"] ?: @"";
+
+            NSDate* startDate = parse_iso_date([input[@"startDate"] UTF8String]);
+            NSDate* endDate = parse_iso_date([input[@"endDate"] UTF8String]);
+            if (!startDate || !endDate) {
+                res.error = strdup([@"startDate and endDate are required" UTF8String]);
+                return;
             }
-        }
+            event.startDate = startDate;
+            event.endDate = endDate;
 
-        // Recurrence rules.
-        if (input[@"recurrenceRules"] && input[@"recurrenceRules"] != [NSNull null]) {
-            NSArray* ruleInputs = input[@"recurrenceRules"];
-            for (NSDictionary* ruleInput in ruleInputs) {
-                EKRecurrenceFrequency freq = [ruleInput[@"frequency"] integerValue];
-                NSInteger interval = [ruleInput[@"interval"] integerValue];
-                if (interval < 1) interval = 1;
-
-                // Days of the week.
-                NSMutableArray<EKRecurrenceDayOfWeek*>* daysOfWeek = nil;
-                if (ruleInput[@"daysOfTheWeek"] && ruleInput[@"daysOfTheWeek"] != [NSNull null]) {
-                    NSArray* dowInputs = ruleInput[@"daysOfTheWeek"];
-                    daysOfWeek = [NSMutableArray arrayWithCapacity:dowInputs.count];
-                    for (NSDictionary* dowInput in dowInputs) {
-                        EKWeekday weekday = [dowInput[@"dayOfTheWeek"] integerValue];
-                        NSInteger weekNum = [dowInput[@"weekNumber"] integerValue];
-                        if (weekNum != 0) {
-                            [daysOfWeek addObject:[EKRecurrenceDayOfWeek dayOfWeek:weekday weekNumber:weekNum]];
-                        } else {
-                            [daysOfWeek addObject:[EKRecurrenceDayOfWeek dayOfWeek:weekday]];
-                        }
-                    }
-                }
-
-                // Integer arrays.
-                NSArray<NSNumber*>* daysOfMonth = ruleInput[@"daysOfTheMonth"];
-                if (daysOfMonth == (id)[NSNull null]) daysOfMonth = nil;
-                NSArray<NSNumber*>* monthsOfYear = ruleInput[@"monthsOfTheYear"];
-                if (monthsOfYear == (id)[NSNull null]) monthsOfYear = nil;
-                NSArray<NSNumber*>* weeksOfYear = ruleInput[@"weeksOfTheYear"];
-                if (weeksOfYear == (id)[NSNull null]) weeksOfYear = nil;
-                NSArray<NSNumber*>* daysOfYear = ruleInput[@"daysOfTheYear"];
-                if (daysOfYear == (id)[NSNull null]) daysOfYear = nil;
-                NSArray<NSNumber*>* setPositions = ruleInput[@"setPositions"];
-                if (setPositions == (id)[NSNull null]) setPositions = nil;
-
-                // Recurrence end.
-                EKRecurrenceEnd* recEnd = nil;
-                NSDictionary* endInput = ruleInput[@"end"];
-                if (endInput && endInput != (id)[NSNull null]) {
-                    if (endInput[@"endDate"] && endInput[@"endDate"] != [NSNull null]) {
-                        NSDate* endDate = parse_iso_date([endInput[@"endDate"] UTF8String]);
-                        if (endDate) {
-                            recEnd = [EKRecurrenceEnd recurrenceEndWithEndDate:endDate];
-                        }
-                    } else if (endInput[@"occurrenceCount"] && [endInput[@"occurrenceCount"] integerValue] > 0) {
-                        recEnd = [EKRecurrenceEnd recurrenceEndWithOccurrenceCount:[endInput[@"occurrenceCount"] integerValue]];
-                    }
-                }
-
-                EKRecurrenceRule* rule = [[EKRecurrenceRule alloc]
-                    initRecurrenceWithFrequency:freq
-                                      interval:interval
-                                 daysOfTheWeek:daysOfWeek
-                                daysOfTheMonth:daysOfMonth
-                               monthsOfTheYear:monthsOfYear
-                                weeksOfTheYear:weeksOfYear
-                                 daysOfTheYear:daysOfYear
-                                  setPositions:setPositions
-                                           end:recEnd];
-                [event addRecurrenceRule:rule];
+            // Optional fields.
+            if (input[@"allDay"] && input[@"allDay"] != [NSNull null]) {
+                event.allDay = [input[@"allDay"] boolValue];
             }
-        }
-
-        // Structured location.
-        if (input[@"structuredLocation"] && input[@"structuredLocation"] != [NSNull null]) {
-            NSDictionary* locInput = input[@"structuredLocation"];
-            NSString* locTitle = locInput[@"title"] ?: @"";
-            EKStructuredLocation* loc = [EKStructuredLocation locationWithTitle:locTitle];
-            NSNumber* lat = locInput[@"latitude"];
-            NSNumber* lng = locInput[@"longitude"];
-            if (lat && lat != (id)[NSNull null] && lng && lng != (id)[NSNull null]) {
-                loc.geoLocation = [[CLLocation alloc] initWithLatitude:[lat doubleValue]
-                                                             longitude:[lng doubleValue]];
-            }
-            NSNumber* radius = locInput[@"radius"];
-            if (radius && radius != (id)[NSNull null]) {
-                loc.radius = [radius doubleValue];
-            }
-            event.structuredLocation = loc;
-        }
-
-        // Save.
-        NSError* saveError = nil;
-        BOOL saved = [store saveEvent:event span:EKSpanThisEvent commit:YES error:&saveError];
-        if (!saved) {
-            res.error = strdup([[NSString stringWithFormat:@"failed to save event: %@",
-                saveError.localizedDescription] UTF8String]);
-            return res;
-        }
-
-        res.result = to_json(event_to_dict(event));
-        if (!res.result) res.error = strdup("JSON serialization failed");
-        return res;
-    }
-}
-
-ek_result_t ek_cal_update_event(const char* event_id, const char* json_input, int span) {
-    @autoreleasepool {
-        ek_result_t res = {NULL, NULL};
-        if (!event_id || !json_input) {
-            res.error = strdup([@"event ID and JSON input are required" UTF8String]);
-            return res;
-        }
-
-        EKEventStore* store = get_store();
-        NSString* eid = [NSString stringWithUTF8String:event_id];
-
-        EKEvent* event = [store eventWithIdentifier:eid];
-        if (!event) {
-            res.error = strdup([[NSString stringWithFormat:@"event not found: %s", event_id] UTF8String]);
-            return res;
-        }
-
-        // Parse JSON input.
-        NSData* data = [NSData dataWithBytes:json_input length:strlen(json_input)];
-        NSError* parseError = nil;
-        NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
-        if (!input) {
-            res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
-            return res;
-        }
-
-        // Update fields that are present in input.
-        if (input[@"title"] && input[@"title"] != [NSNull null]) {
-            event.title = input[@"title"];
-        }
-        if (input[@"startDate"] && input[@"startDate"] != [NSNull null]) {
-            NSDate* d = parse_iso_date([input[@"startDate"] UTF8String]);
-            if (d) event.startDate = d;
-        }
-        if (input[@"endDate"] && input[@"endDate"] != [NSNull null]) {
-            NSDate* d = parse_iso_date([input[@"endDate"] UTF8String]);
-            if (d) event.endDate = d;
-        }
-        if (input[@"allDay"] && input[@"allDay"] != [NSNull null]) {
-            event.allDay = [input[@"allDay"] boolValue];
-        }
-        if (input[@"location"] != nil) {
-            if (input[@"location"] == [NSNull null]) {
-                event.location = nil;
-            } else {
+            if (input[@"location"] && input[@"location"] != [NSNull null]) {
                 event.location = input[@"location"];
             }
-        }
-        if (input[@"notes"] != nil) {
-            if (input[@"notes"] == [NSNull null]) {
-                event.notes = nil;
-            } else {
+            if (input[@"notes"] && input[@"notes"] != [NSNull null]) {
                 event.notes = input[@"notes"];
             }
-        }
-        if (input[@"url"] != nil) {
-            if (input[@"url"] == [NSNull null]) {
-                event.URL = nil;
-            } else {
+            if (input[@"url"] && input[@"url"] != [NSNull null]) {
                 event.URL = [NSURL URLWithString:input[@"url"]];
             }
-        }
 
-        // TimeZone support.
-        if (input[@"timeZone"] != nil) {
-            if (input[@"timeZone"] == [NSNull null]) {
-                event.timeZone = nil;
-            } else {
+            // TimeZone support.
+            if (input[@"timeZone"] && input[@"timeZone"] != [NSNull null]) {
                 NSTimeZone* tz = [NSTimeZone timeZoneWithName:input[@"timeZone"]];
                 if (tz) {
                     event.timeZone = tz;
                 }
             }
-        }
 
-        // Calendar (move to different calendar).
-        if (input[@"calendar"] && input[@"calendar"] != [NSNull null]) {
-            NSString* calName = input[@"calendar"];
-            EKCalendar* cal = find_calendar_by_name(store, calName);
-            if (!cal) {
-                res.error = strdup([[NSString stringWithFormat:@"calendar not found: %@", calName] UTF8String]);
-                return res;
+            // Calendar.
+            if (input[@"calendar"] && input[@"calendar"] != [NSNull null]) {
+                NSString* calName = input[@"calendar"];
+                EKCalendar* cal = find_calendar_by_name(store, calName);
+                if (!cal) {
+                    res.error = strdup([[NSString stringWithFormat:@"calendar not found: %@", calName] UTF8String]);
+                    return;
+                }
+                event.calendar = cal;
+            } else {
+                event.calendar = [store defaultCalendarForNewEvents];
             }
-            event.calendar = cal;
-        }
 
-        // Alerts (replace all).
-        if (input[@"alerts"] != nil) {
-            // Remove existing alarms.
-            for (EKAlarm* alarm in [event.alarms copy]) {
-                [event removeAlarm:alarm];
-            }
-            if (input[@"alerts"] != [NSNull null]) {
+            // Alerts.
+            if (input[@"alerts"] && input[@"alerts"] != [NSNull null]) {
                 NSArray* alertInputs = input[@"alerts"];
                 for (NSDictionary* alertInput in alertInputs) {
                     double offset = [alertInput[@"relativeOffset"] doubleValue];
@@ -774,21 +588,16 @@ ek_result_t ek_cal_update_event(const char* event_id, const char* json_input, in
                     [event addAlarm:alarm];
                 }
             }
-        }
 
-        // Recurrence rules (replace all).
-        if (input[@"recurrenceRules"] != nil) {
-            // Remove existing rules.
-            for (EKRecurrenceRule* rule in [event.recurrenceRules copy]) {
-                [event removeRecurrenceRule:rule];
-            }
-            if (input[@"recurrenceRules"] != [NSNull null]) {
+            // Recurrence rules.
+            if (input[@"recurrenceRules"] && input[@"recurrenceRules"] != [NSNull null]) {
                 NSArray* ruleInputs = input[@"recurrenceRules"];
                 for (NSDictionary* ruleInput in ruleInputs) {
                     EKRecurrenceFrequency freq = [ruleInput[@"frequency"] integerValue];
                     NSInteger interval = [ruleInput[@"interval"] integerValue];
                     if (interval < 1) interval = 1;
 
+                    // Days of the week.
                     NSMutableArray<EKRecurrenceDayOfWeek*>* daysOfWeek = nil;
                     if (ruleInput[@"daysOfTheWeek"] && ruleInput[@"daysOfTheWeek"] != [NSNull null]) {
                         NSArray* dowInputs = ruleInput[@"daysOfTheWeek"];
@@ -804,6 +613,7 @@ ek_result_t ek_cal_update_event(const char* event_id, const char* json_input, in
                         }
                     }
 
+                    // Integer arrays.
                     NSArray<NSNumber*>* daysOfMonth = ruleInput[@"daysOfTheMonth"];
                     if (daysOfMonth == (id)[NSNull null]) daysOfMonth = nil;
                     NSArray<NSNumber*>* monthsOfYear = ruleInput[@"monthsOfTheYear"];
@@ -815,6 +625,7 @@ ek_result_t ek_cal_update_event(const char* event_id, const char* json_input, in
                     NSArray<NSNumber*>* setPositions = ruleInput[@"setPositions"];
                     if (setPositions == (id)[NSNull null]) setPositions = nil;
 
+                    // Recurrence end.
                     EKRecurrenceEnd* recEnd = nil;
                     NSDictionary* endInput = ruleInput[@"end"];
                     if (endInput && endInput != (id)[NSNull null]) {
@@ -841,13 +652,9 @@ ek_result_t ek_cal_update_event(const char* event_id, const char* json_input, in
                     [event addRecurrenceRule:rule];
                 }
             }
-        }
 
-        // Structured location.
-        if (input[@"structuredLocation"] != nil) {
-            if (input[@"structuredLocation"] == [NSNull null]) {
-                event.structuredLocation = nil;
-            } else {
+            // Structured location.
+            if (input[@"structuredLocation"] && input[@"structuredLocation"] != [NSNull null]) {
                 NSDictionary* locInput = input[@"structuredLocation"];
                 NSString* locTitle = locInput[@"title"] ?: @"";
                 EKStructuredLocation* loc = [EKStructuredLocation locationWithTitle:locTitle];
@@ -863,22 +670,230 @@ ek_result_t ek_cal_update_event(const char* event_id, const char* json_input, in
                 }
                 event.structuredLocation = loc;
             }
-        }
 
-        // Save.
-        EKSpan ekSpan = (span == 1) ? EKSpanFutureEvents : EKSpanThisEvent;
-        NSError* saveError = nil;
-        BOOL saved = [store saveEvent:event span:ekSpan commit:YES error:&saveError];
-        if (!saved) {
-            res.error = strdup([[NSString stringWithFormat:@"failed to update event: %@",
-                saveError.localizedDescription] UTF8String]);
-            return res;
-        }
+            // Save.
+            NSError* saveError = nil;
+            BOOL saved = [store saveEvent:event span:EKSpanThisEvent commit:YES error:&saveError];
+            if (!saved) {
+                res.error = strdup([[NSString stringWithFormat:@"failed to save event: %@",
+                    saveError.localizedDescription] UTF8String]);
+                return;
+            }
 
-        res.result = to_json(event_to_dict(event));
-        if (!res.result) res.error = strdup("JSON serialization failed");
-        return res;
-    }
+            res.result = to_json(event_to_dict(event));
+            if (!res.result) res.error = strdup("JSON serialization failed");
+        }
+    });
+    return res;
+}
+
+ek_result_t ek_cal_update_event(const char* event_id, const char* json_input, int span) {
+    __block ek_result_t res = {NULL, NULL};
+    dispatch_sync(get_write_queue(), ^{
+        @autoreleasepool {
+            if (!event_id || !json_input) {
+                res.error = strdup([@"event ID and JSON input are required" UTF8String]);
+                return;
+            }
+
+            EKEventStore* store = get_store();
+            NSString* eid = [NSString stringWithUTF8String:event_id];
+
+            EKEvent* event = [store eventWithIdentifier:eid];
+            if (!event) {
+                res.error = strdup([[NSString stringWithFormat:@"event not found: %s", event_id] UTF8String]);
+                return;
+            }
+
+            // Parse JSON input.
+            NSData* data = [NSData dataWithBytes:json_input length:strlen(json_input)];
+            NSError* parseError = nil;
+            NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
+            if (!input) {
+                res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
+                return;
+            }
+
+            // Update fields that are present in input.
+            if (input[@"title"] && input[@"title"] != [NSNull null]) {
+                event.title = input[@"title"];
+            }
+            if (input[@"startDate"] && input[@"startDate"] != [NSNull null]) {
+                NSDate* d = parse_iso_date([input[@"startDate"] UTF8String]);
+                if (d) event.startDate = d;
+            }
+            if (input[@"endDate"] && input[@"endDate"] != [NSNull null]) {
+                NSDate* d = parse_iso_date([input[@"endDate"] UTF8String]);
+                if (d) event.endDate = d;
+            }
+            if (input[@"allDay"] && input[@"allDay"] != [NSNull null]) {
+                event.allDay = [input[@"allDay"] boolValue];
+            }
+            if (input[@"location"] != nil) {
+                if (input[@"location"] == [NSNull null]) {
+                    event.location = nil;
+                } else {
+                    event.location = input[@"location"];
+                }
+            }
+            if (input[@"notes"] != nil) {
+                if (input[@"notes"] == [NSNull null]) {
+                    event.notes = nil;
+                } else {
+                    event.notes = input[@"notes"];
+                }
+            }
+            if (input[@"url"] != nil) {
+                if (input[@"url"] == [NSNull null]) {
+                    event.URL = nil;
+                } else {
+                    event.URL = [NSURL URLWithString:input[@"url"]];
+                }
+            }
+
+            // TimeZone support.
+            if (input[@"timeZone"] != nil) {
+                if (input[@"timeZone"] == [NSNull null]) {
+                    event.timeZone = nil;
+                } else {
+                    NSTimeZone* tz = [NSTimeZone timeZoneWithName:input[@"timeZone"]];
+                    if (tz) {
+                        event.timeZone = tz;
+                    }
+                }
+            }
+
+            // Calendar (move to different calendar).
+            if (input[@"calendar"] && input[@"calendar"] != [NSNull null]) {
+                NSString* calName = input[@"calendar"];
+                EKCalendar* cal = find_calendar_by_name(store, calName);
+                if (!cal) {
+                    res.error = strdup([[NSString stringWithFormat:@"calendar not found: %@", calName] UTF8String]);
+                    return;
+                }
+                event.calendar = cal;
+            }
+
+            // Alerts (replace all).
+            if (input[@"alerts"] != nil) {
+                // Remove existing alarms.
+                for (EKAlarm* alarm in [event.alarms copy]) {
+                    [event removeAlarm:alarm];
+                }
+                if (input[@"alerts"] != [NSNull null]) {
+                    NSArray* alertInputs = input[@"alerts"];
+                    for (NSDictionary* alertInput in alertInputs) {
+                        double offset = [alertInput[@"relativeOffset"] doubleValue];
+                        EKAlarm* alarm = [EKAlarm alarmWithRelativeOffset:offset];
+                        [event addAlarm:alarm];
+                    }
+                }
+            }
+
+            // Recurrence rules (replace all).
+            if (input[@"recurrenceRules"] != nil) {
+                // Remove existing rules.
+                for (EKRecurrenceRule* rule in [event.recurrenceRules copy]) {
+                    [event removeRecurrenceRule:rule];
+                }
+                if (input[@"recurrenceRules"] != [NSNull null]) {
+                    NSArray* ruleInputs = input[@"recurrenceRules"];
+                    for (NSDictionary* ruleInput in ruleInputs) {
+                        EKRecurrenceFrequency freq = [ruleInput[@"frequency"] integerValue];
+                        NSInteger interval = [ruleInput[@"interval"] integerValue];
+                        if (interval < 1) interval = 1;
+
+                        NSMutableArray<EKRecurrenceDayOfWeek*>* daysOfWeek = nil;
+                        if (ruleInput[@"daysOfTheWeek"] && ruleInput[@"daysOfTheWeek"] != [NSNull null]) {
+                            NSArray* dowInputs = ruleInput[@"daysOfTheWeek"];
+                            daysOfWeek = [NSMutableArray arrayWithCapacity:dowInputs.count];
+                            for (NSDictionary* dowInput in dowInputs) {
+                                EKWeekday weekday = [dowInput[@"dayOfTheWeek"] integerValue];
+                                NSInteger weekNum = [dowInput[@"weekNumber"] integerValue];
+                                if (weekNum != 0) {
+                                    [daysOfWeek addObject:[EKRecurrenceDayOfWeek dayOfWeek:weekday weekNumber:weekNum]];
+                                } else {
+                                    [daysOfWeek addObject:[EKRecurrenceDayOfWeek dayOfWeek:weekday]];
+                                }
+                            }
+                        }
+
+                        NSArray<NSNumber*>* daysOfMonth = ruleInput[@"daysOfTheMonth"];
+                        if (daysOfMonth == (id)[NSNull null]) daysOfMonth = nil;
+                        NSArray<NSNumber*>* monthsOfYear = ruleInput[@"monthsOfTheYear"];
+                        if (monthsOfYear == (id)[NSNull null]) monthsOfYear = nil;
+                        NSArray<NSNumber*>* weeksOfYear = ruleInput[@"weeksOfTheYear"];
+                        if (weeksOfYear == (id)[NSNull null]) weeksOfYear = nil;
+                        NSArray<NSNumber*>* daysOfYear = ruleInput[@"daysOfTheYear"];
+                        if (daysOfYear == (id)[NSNull null]) daysOfYear = nil;
+                        NSArray<NSNumber*>* setPositions = ruleInput[@"setPositions"];
+                        if (setPositions == (id)[NSNull null]) setPositions = nil;
+
+                        EKRecurrenceEnd* recEnd = nil;
+                        NSDictionary* endInput = ruleInput[@"end"];
+                        if (endInput && endInput != (id)[NSNull null]) {
+                            if (endInput[@"endDate"] && endInput[@"endDate"] != [NSNull null]) {
+                                NSDate* endDate = parse_iso_date([endInput[@"endDate"] UTF8String]);
+                                if (endDate) {
+                                    recEnd = [EKRecurrenceEnd recurrenceEndWithEndDate:endDate];
+                                }
+                            } else if (endInput[@"occurrenceCount"] && [endInput[@"occurrenceCount"] integerValue] > 0) {
+                                recEnd = [EKRecurrenceEnd recurrenceEndWithOccurrenceCount:[endInput[@"occurrenceCount"] integerValue]];
+                            }
+                        }
+
+                        EKRecurrenceRule* rule = [[EKRecurrenceRule alloc]
+                            initRecurrenceWithFrequency:freq
+                                              interval:interval
+                                         daysOfTheWeek:daysOfWeek
+                                        daysOfTheMonth:daysOfMonth
+                                       monthsOfTheYear:monthsOfYear
+                                        weeksOfTheYear:weeksOfYear
+                                         daysOfTheYear:daysOfYear
+                                          setPositions:setPositions
+                                                   end:recEnd];
+                        [event addRecurrenceRule:rule];
+                    }
+                }
+            }
+
+            // Structured location.
+            if (input[@"structuredLocation"] != nil) {
+                if (input[@"structuredLocation"] == [NSNull null]) {
+                    event.structuredLocation = nil;
+                } else {
+                    NSDictionary* locInput = input[@"structuredLocation"];
+                    NSString* locTitle = locInput[@"title"] ?: @"";
+                    EKStructuredLocation* loc = [EKStructuredLocation locationWithTitle:locTitle];
+                    NSNumber* lat = locInput[@"latitude"];
+                    NSNumber* lng = locInput[@"longitude"];
+                    if (lat && lat != (id)[NSNull null] && lng && lng != (id)[NSNull null]) {
+                        loc.geoLocation = [[CLLocation alloc] initWithLatitude:[lat doubleValue]
+                                                                     longitude:[lng doubleValue]];
+                    }
+                    NSNumber* radius = locInput[@"radius"];
+                    if (radius && radius != (id)[NSNull null]) {
+                        loc.radius = [radius doubleValue];
+                    }
+                    event.structuredLocation = loc;
+                }
+            }
+
+            // Save.
+            EKSpan ekSpan = (span == 1) ? EKSpanFutureEvents : EKSpanThisEvent;
+            NSError* saveError = nil;
+            BOOL saved = [store saveEvent:event span:ekSpan commit:YES error:&saveError];
+            if (!saved) {
+                res.error = strdup([[NSString stringWithFormat:@"failed to update event: %@",
+                    saveError.localizedDescription] UTF8String]);
+                return;
+            }
+
+            res.result = to_json(event_to_dict(event));
+            if (!res.result) res.error = strdup("JSON serialization failed");
+        }
+    });
+    return res;
 }
 
 // --- Find source by name (case-insensitive) ---
@@ -928,185 +943,193 @@ static CGColorRef parse_hex_color(NSString* hex) {
 // --- Calendar CRUD ---
 
 ek_result_t ek_cal_create_calendar(const char* json_input) {
-    @autoreleasepool {
-        ek_result_t res = {NULL, NULL};
-        if (!json_input) {
-            res.error = strdup([@"JSON input is required" UTF8String]);
-            return res;
-        }
-
-        EKEventStore* store = get_store();
-
-        // Parse JSON input.
-        NSData* data = [NSData dataWithBytes:json_input length:strlen(json_input)];
-        NSError* parseError = nil;
-        NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
-        if (!input) {
-            res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
-            return res;
-        }
-
-        EKCalendar* cal = [EKCalendar calendarForEntityType:EKEntityTypeEvent eventStore:store];
-
-        // Title (required).
-        cal.title = input[@"title"] ?: @"";
-
-        // Source (required — validated in Go layer).
-        EKSource* source = find_source_by_name(store, input[@"source"]);
-        if (!source) {
-            res.error = strdup([[NSString stringWithFormat:@"source not found: %@", input[@"source"]] UTF8String]);
-            return res;
-        }
-        cal.source = source;
-
-        // Color.
-        if (input[@"color"] && input[@"color"] != [NSNull null] && [input[@"color"] length] > 0) {
-            CGColorRef color = parse_hex_color(input[@"color"]);
-            if (color) {
-                cal.CGColor = color;
-                CGColorRelease(color);
+    __block ek_result_t res = {NULL, NULL};
+    dispatch_sync(get_write_queue(), ^{
+        @autoreleasepool {
+            if (!json_input) {
+                res.error = strdup([@"JSON input is required" UTF8String]);
+                return;
             }
-        }
 
-        // Save.
-        NSError* saveError = nil;
-        BOOL saved = [store saveCalendar:cal commit:YES error:&saveError];
-        if (!saved) {
-            res.error = strdup([[NSString stringWithFormat:@"failed to save calendar: %@",
-                saveError.localizedDescription] UTF8String]);
-            return res;
-        }
+            EKEventStore* store = get_store();
 
-        res.result = to_json(calendar_to_dict(cal));
-        if (!res.result) res.error = strdup("JSON serialization failed");
-        return res;
-    }
+            // Parse JSON input.
+            NSData* data = [NSData dataWithBytes:json_input length:strlen(json_input)];
+            NSError* parseError = nil;
+            NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
+            if (!input) {
+                res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
+                return;
+            }
+
+            EKCalendar* cal = [EKCalendar calendarForEntityType:EKEntityTypeEvent eventStore:store];
+
+            // Title (required).
+            cal.title = input[@"title"] ?: @"";
+
+            // Source (required — validated in Go layer).
+            EKSource* source = find_source_by_name(store, input[@"source"]);
+            if (!source) {
+                res.error = strdup([[NSString stringWithFormat:@"source not found: %@", input[@"source"]] UTF8String]);
+                return;
+            }
+            cal.source = source;
+
+            // Color.
+            if (input[@"color"] && input[@"color"] != [NSNull null] && [input[@"color"] length] > 0) {
+                CGColorRef color = parse_hex_color(input[@"color"]);
+                if (color) {
+                    cal.CGColor = color;
+                    CGColorRelease(color);
+                }
+            }
+
+            // Save.
+            NSError* saveError = nil;
+            BOOL saved = [store saveCalendar:cal commit:YES error:&saveError];
+            if (!saved) {
+                res.error = strdup([[NSString stringWithFormat:@"failed to save calendar: %@",
+                    saveError.localizedDescription] UTF8String]);
+                return;
+            }
+
+            res.result = to_json(calendar_to_dict(cal));
+            if (!res.result) res.error = strdup("JSON serialization failed");
+        }
+    });
+    return res;
 }
 
 ek_result_t ek_cal_update_calendar(const char* calendar_id, const char* json_input) {
-    @autoreleasepool {
-        ek_result_t res = {NULL, NULL};
-        if (!calendar_id || !json_input) {
-            res.error = strdup([@"calendar ID and JSON input are required" UTF8String]);
-            return res;
-        }
-
-        EKEventStore* store = get_store();
-        NSString* calId = [NSString stringWithUTF8String:calendar_id];
-
-        EKCalendar* cal = find_calendar_by_id(store, calId);
-        if (!cal) {
-            res.error = strdup([[NSString stringWithFormat:@"calendar not found: %s", calendar_id] UTF8String]);
-            return res;
-        }
-
-        // Check immutability.
-        if (cal.isImmutable) {
-            res.error = strdup([[NSString stringWithFormat:@"calendar is immutable: %@", cal.title] UTF8String]);
-            return res;
-        }
-
-        // Parse JSON input.
-        NSData* data = [NSData dataWithBytes:json_input length:strlen(json_input)];
-        NSError* parseError = nil;
-        NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
-        if (!input) {
-            res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
-            return res;
-        }
-
-        // Update title.
-        if (input[@"title"] && input[@"title"] != [NSNull null]) {
-            cal.title = input[@"title"];
-        }
-
-        // Update color.
-        if (input[@"color"] && input[@"color"] != [NSNull null]) {
-            CGColorRef color = parse_hex_color(input[@"color"]);
-            if (color) {
-                cal.CGColor = color;
-                CGColorRelease(color);
+    __block ek_result_t res = {NULL, NULL};
+    dispatch_sync(get_write_queue(), ^{
+        @autoreleasepool {
+            if (!calendar_id || !json_input) {
+                res.error = strdup([@"calendar ID and JSON input are required" UTF8String]);
+                return;
             }
-        }
 
-        // Save.
-        NSError* saveError = nil;
-        BOOL saved = [store saveCalendar:cal commit:YES error:&saveError];
-        if (!saved) {
-            res.error = strdup([[NSString stringWithFormat:@"failed to update calendar: %@",
-                saveError.localizedDescription] UTF8String]);
-            return res;
-        }
+            EKEventStore* store = get_store();
+            NSString* calId = [NSString stringWithUTF8String:calendar_id];
 
-        res.result = to_json(calendar_to_dict(cal));
-        if (!res.result) res.error = strdup("JSON serialization failed");
-        return res;
-    }
+            EKCalendar* cal = find_calendar_by_id(store, calId);
+            if (!cal) {
+                res.error = strdup([[NSString stringWithFormat:@"calendar not found: %s", calendar_id] UTF8String]);
+                return;
+            }
+
+            // Check immutability.
+            if (cal.isImmutable) {
+                res.error = strdup([[NSString stringWithFormat:@"calendar is immutable: %@", cal.title] UTF8String]);
+                return;
+            }
+
+            // Parse JSON input.
+            NSData* data = [NSData dataWithBytes:json_input length:strlen(json_input)];
+            NSError* parseError = nil;
+            NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
+            if (!input) {
+                res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
+                return;
+            }
+
+            // Update title.
+            if (input[@"title"] && input[@"title"] != [NSNull null]) {
+                cal.title = input[@"title"];
+            }
+
+            // Update color.
+            if (input[@"color"] && input[@"color"] != [NSNull null]) {
+                CGColorRef color = parse_hex_color(input[@"color"]);
+                if (color) {
+                    cal.CGColor = color;
+                    CGColorRelease(color);
+                }
+            }
+
+            // Save.
+            NSError* saveError = nil;
+            BOOL saved = [store saveCalendar:cal commit:YES error:&saveError];
+            if (!saved) {
+                res.error = strdup([[NSString stringWithFormat:@"failed to update calendar: %@",
+                    saveError.localizedDescription] UTF8String]);
+                return;
+            }
+
+            res.result = to_json(calendar_to_dict(cal));
+            if (!res.result) res.error = strdup("JSON serialization failed");
+        }
+    });
+    return res;
 }
 
 ek_result_t ek_cal_delete_calendar(const char* calendar_id) {
-    @autoreleasepool {
-        ek_result_t res = {NULL, NULL};
-        if (!calendar_id) {
-            res.error = strdup([@"calendar ID is required" UTF8String]);
-            return res;
+    __block ek_result_t res = {NULL, NULL};
+    dispatch_sync(get_write_queue(), ^{
+        @autoreleasepool {
+            if (!calendar_id) {
+                res.error = strdup([@"calendar ID is required" UTF8String]);
+                return;
+            }
+
+            EKEventStore* store = get_store();
+            NSString* calId = [NSString stringWithUTF8String:calendar_id];
+
+            EKCalendar* cal = find_calendar_by_id(store, calId);
+            if (!cal) {
+                res.error = strdup([[NSString stringWithFormat:@"calendar not found: %s", calendar_id] UTF8String]);
+                return;
+            }
+
+            // Check immutability.
+            if (cal.isImmutable) {
+                res.error = strdup([[NSString stringWithFormat:@"calendar is immutable: %@", cal.title] UTF8String]);
+                return;
+            }
+
+            NSError* removeError = nil;
+            BOOL removed = [store removeCalendar:cal commit:YES error:&removeError];
+            if (!removed) {
+                res.error = strdup([[NSString stringWithFormat:@"failed to delete calendar: %@",
+                    removeError.localizedDescription] UTF8String]);
+                return;
+            }
+
+            res.result = strdup("ok");
         }
-
-        EKEventStore* store = get_store();
-        NSString* calId = [NSString stringWithUTF8String:calendar_id];
-
-        EKCalendar* cal = find_calendar_by_id(store, calId);
-        if (!cal) {
-            res.error = strdup([[NSString stringWithFormat:@"calendar not found: %s", calendar_id] UTF8String]);
-            return res;
-        }
-
-        // Check immutability.
-        if (cal.isImmutable) {
-            res.error = strdup([[NSString stringWithFormat:@"calendar is immutable: %@", cal.title] UTF8String]);
-            return res;
-        }
-
-        NSError* removeError = nil;
-        BOOL removed = [store removeCalendar:cal commit:YES error:&removeError];
-        if (!removed) {
-            res.error = strdup([[NSString stringWithFormat:@"failed to delete calendar: %@",
-                removeError.localizedDescription] UTF8String]);
-            return res;
-        }
-
-        res.result = strdup("ok");
-        return res;
-    }
+    });
+    return res;
 }
 
 ek_result_t ek_cal_delete_event(const char* event_id, int span) {
-    @autoreleasepool {
-        ek_result_t res = {NULL, NULL};
-        if (!event_id) {
-            res.error = strdup([@"event ID is required" UTF8String]);
-            return res;
+    __block ek_result_t res = {NULL, NULL};
+    dispatch_sync(get_write_queue(), ^{
+        @autoreleasepool {
+            if (!event_id) {
+                res.error = strdup([@"event ID is required" UTF8String]);
+                return;
+            }
+
+            EKEventStore* store = get_store();
+            NSString* eid = [NSString stringWithUTF8String:event_id];
+
+            EKEvent* event = [store eventWithIdentifier:eid];
+            if (!event) {
+                res.error = strdup([[NSString stringWithFormat:@"event not found: %s", event_id] UTF8String]);
+                return;
+            }
+
+            EKSpan ekSpan = (span == 1) ? EKSpanFutureEvents : EKSpanThisEvent;
+            NSError* removeError = nil;
+            BOOL removed = [store removeEvent:event span:ekSpan commit:YES error:&removeError];
+            if (!removed) {
+                res.error = strdup([[NSString stringWithFormat:@"failed to delete event: %@",
+                    removeError.localizedDescription] UTF8String]);
+                return;
+            }
+
+            res.result = strdup("ok");
         }
-
-        EKEventStore* store = get_store();
-        NSString* eid = [NSString stringWithUTF8String:event_id];
-
-        EKEvent* event = [store eventWithIdentifier:eid];
-        if (!event) {
-            res.error = strdup([[NSString stringWithFormat:@"event not found: %s", event_id] UTF8String]);
-            return res;
-        }
-
-        EKSpan ekSpan = (span == 1) ? EKSpanFutureEvents : EKSpanThisEvent;
-        NSError* removeError = nil;
-        BOOL removed = [store removeEvent:event span:ekSpan commit:YES error:&removeError];
-        if (!removed) {
-            res.error = strdup([[NSString stringWithFormat:@"failed to delete event: %@",
-                removeError.localizedDescription] UTF8String]);
-            return res;
-        }
-
-        res.result = strdup("ok");
-        return res;
-    }
+    });
+    return res;
 }

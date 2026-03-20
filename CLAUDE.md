@@ -77,6 +77,8 @@ go-eventkit/
 
 ## Key Technical Decisions
 - `dispatch_once` for EKEventStore singleton + TCC access request — **each package has its own singleton** (C objects can't cross cgo package boundaries)
+- **Serial write queue**: All write operations (`saveEvent`, `removeEvent`, `saveCalendar`, `removeCalendar`, `saveReminder`, `removeReminder`) are wrapped in `dispatch_sync` on a per-package serial queue (`dev.sidv.eventkit.cal.writes` / `dev.sidv.eventkit.rem.writes`). Reads (`eventsMatchingPredicate`, `calendarsForEntityType`, `fetchRemindersMatchingPredicate`) stay concurrent. This prevents EventKit database corruption from concurrent goroutine writes.
+- **Inline error returns (`ek_result_t`)**: All bridge functions return a struct with `result` + `error` fields. No `__thread` TLS — safe under Go's M:N scheduler.
 - `dispatch_semaphore` for sync wrappers around async EventKit APIs (reminders fetch is async; calendar fetch is synchronous)
 - Calendar writes via EventKit directly (`saveEvent:span:commit:`) — no AppleScript needed
 - Calendar/list container CRUD via `saveCalendar:commit:` / `removeCalendar:commit:` — color via `CGColorCreateGenericRGB()`, source is **required** (no default fallback), immutability check via `cal.isImmutable`
