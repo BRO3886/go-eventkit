@@ -53,6 +53,13 @@ ek_result_t ek_cal_update_calendar(const char* calendar_id, const char* json_inp
 // Returns "ok" on success. Caller must free result.
 ek_result_t ek_cal_delete_calendar(const char* calendar_id);
 
+// ek_cal_delete_events deletes multiple events in a single bridge call.
+// json_ids is a JSON array of event identifiers.
+// span is 0 for this event only, 1 for future events.
+// Returns a JSON object mapping failed event IDs to error messages.
+// Caller must free result with ek_cal_free.
+ek_result_t ek_cal_delete_events(const char* json_ids, int span);
+
 // ek_cal_free frees a string returned by the above functions.
 void ek_cal_free(char* ptr);
 

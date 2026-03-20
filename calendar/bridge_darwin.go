@@ -11,6 +11,7 @@ package calendar
 import "C"
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -122,6 +123,12 @@ func (c *Client) Event(id string) (*Event, error) {
 // CreateEvent creates a new calendar event and returns it with its assigned ID.
 // The event is saved to the EventKit store immediately.
 func (c *Client) CreateEvent(input CreateEventInput) (*Event, error) {
+	for _, rule := range input.RecurrenceRules {
+		if err := rule.Validate(); err != nil {
+			return nil, fmt.Errorf("calendar: invalid recurrence rule: %w", err)
+		}
+	}
+
 	jsonBytes, err := marshalCreateInput(input)
 	if err != nil {
 		return nil, fmt.Errorf("calendar: failed to marshal input: %w", err)
@@ -145,6 +152,14 @@ func (c *Client) CreateEvent(input CreateEventInput) (*Event, error) {
 // whether the change applies to just this occurrence or all future occurrences
 // of a recurring event. Returns [ErrNotFound] if the event does not exist.
 func (c *Client) UpdateEvent(id string, input UpdateEventInput, span Span) (*Event, error) {
+	if input.RecurrenceRules != nil {
+		for _, rule := range *input.RecurrenceRules {
+			if err := rule.Validate(); err != nil {
+				return nil, fmt.Errorf("calendar: invalid recurrence rule: %w", err)
+			}
+		}
+	}
+
 	jsonBytes, err := marshalUpdateInput(input)
 	if err != nil {
 		return nil, fmt.Errorf("calendar: failed to marshal input: %w", err)
@@ -187,6 +202,53 @@ func (c *Client) DeleteEvent(id string, span Span) error {
 	}
 	C.ek_cal_free(res.result)
 	return nil
+}
+
+// DeleteEvents permanently removes multiple events in a single bridge call.
+// The span parameter applies to all events.
+// Returns a map of event ID to error for any events that failed to delete.
+// Events that don't exist are silently skipped (not included in the error map).
+// Returns nil if all deletions succeed (or ids is empty).
+func (c *Client) DeleteEvents(ids []string, span Span) map[string]error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	jsonBytes, err := json.Marshal(ids)
+	if err != nil {
+		result := make(map[string]error)
+		for _, id := range ids {
+			result[id] = fmt.Errorf("calendar: failed to marshal input: %w", err)
+		}
+		return result
+	}
+
+	cJSON := C.CString(string(jsonBytes))
+	defer C.free(unsafe.Pointer(cJSON))
+
+	res := C.ek_cal_delete_events(cJSON, C.int(span))
+	if res.error != nil {
+		errMsg := resultErr(res)
+		result := make(map[string]error)
+		for _, id := range ids {
+			result[id] = fmt.Errorf("calendar: %w", errMsg)
+		}
+		return result
+	}
+	defer C.ek_cal_free(res.result)
+
+	var errMap map[string]string
+	if err := json.Unmarshal([]byte(C.GoString(res.result)), &errMap); err != nil {
+		return nil
+	}
+	if len(errMap) == 0 {
+		return nil
+	}
+	result := make(map[string]error, len(errMap))
+	for id, msg := range errMap {
+		result[id] = errors.New(msg)
+	}
+	return result
 }
 
 // CreateCalendar creates a new calendar and returns it with its assigned ID.

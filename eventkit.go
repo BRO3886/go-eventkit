@@ -23,7 +23,10 @@
 // integrations and geofence alerts.
 package eventkit
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // RecurrenceRule defines how an event or reminder repeats.
 // Corresponds to EKRecurrenceRule (subset of iCalendar RRULE).
@@ -52,6 +55,49 @@ type RecurrenceRule struct {
 	SetPositions []int `json:"setPositions,omitempty"`
 	// End defines when the recurrence stops. Nil means it recurs forever.
 	End *RecurrenceEnd `json:"end,omitempty"`
+}
+
+// Validate checks whether the recurrence rule satisfies Apple's EventKit
+// constraints. It returns a descriptive error for the first violation found,
+// or nil if the rule is valid.
+func (r RecurrenceRule) Validate() error {
+	if r.Interval < 1 {
+		return fmt.Errorf("interval must be >= 1, got %d", r.Interval)
+	}
+
+	if len(r.DaysOfTheWeek) > 0 && r.Frequency != FrequencyWeekly && r.Frequency != FrequencyMonthly && r.Frequency != FrequencyYearly {
+		return fmt.Errorf("daysOfTheWeek is only valid for weekly, monthly, or yearly frequency, got %s", r.Frequency)
+	}
+
+	if len(r.DaysOfTheMonth) > 0 && r.Frequency != FrequencyMonthly && r.Frequency != FrequencyYearly {
+		return fmt.Errorf("daysOfTheMonth is only valid for monthly or yearly frequency, got %s", r.Frequency)
+	}
+
+	if len(r.MonthsOfTheYear) > 0 && r.Frequency != FrequencyYearly {
+		return fmt.Errorf("monthsOfTheYear is only valid for yearly frequency, got %s", r.Frequency)
+	}
+
+	if len(r.WeeksOfTheYear) > 0 && r.Frequency != FrequencyYearly {
+		return fmt.Errorf("weeksOfTheYear is only valid for yearly frequency, got %s", r.Frequency)
+	}
+
+	if len(r.DaysOfTheYear) > 0 && r.Frequency != FrequencyYearly {
+		return fmt.Errorf("daysOfTheYear is only valid for yearly frequency, got %s", r.Frequency)
+	}
+
+	if len(r.SetPositions) > 0 {
+		hasConstraint := len(r.DaysOfTheWeek) > 0 || len(r.DaysOfTheMonth) > 0 ||
+			len(r.MonthsOfTheYear) > 0 || len(r.WeeksOfTheYear) > 0 || len(r.DaysOfTheYear) > 0
+		if !hasConstraint {
+			return fmt.Errorf("setPositions requires at least one of daysOfTheWeek, daysOfTheMonth, monthsOfTheYear, weeksOfTheYear, or daysOfTheYear")
+		}
+	}
+
+	if r.End != nil && r.End.EndDate == nil && r.End.OccurrenceCount < 1 {
+		return fmt.Errorf("end.occurrenceCount must be > 0, got %d", r.End.OccurrenceCount)
+	}
+
+	return nil
 }
 
 // Until sets the recurrence to end on a specific date.

@@ -150,6 +150,162 @@ func TestCountChain(t *testing.T) {
 	}
 }
 
+// --- Validate() tests ---
+
+func TestRecurrenceRuleValidate(t *testing.T) {
+	endDate := time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name    string
+		rule    RecurrenceRule
+		wantErr bool
+	}{
+		{
+			name:    "valid daily rule",
+			rule:    Daily(1),
+			wantErr: false,
+		},
+		{
+			name:    "valid weekly with days of week",
+			rule:    Weekly(1, Monday, Friday),
+			wantErr: false,
+		},
+		{
+			name: "valid monthly with days of month",
+			rule: Monthly(1, 1, 15),
+			wantErr: false,
+		},
+		{
+			name: "valid yearly with months",
+			rule: RecurrenceRule{
+				Frequency:       FrequencyYearly,
+				Interval:        1,
+				MonthsOfTheYear: []int{1, 6},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid yearly with all constraint types",
+			rule: RecurrenceRule{
+				Frequency:       FrequencyYearly,
+				Interval:        1,
+				DaysOfTheWeek:   []RecurrenceDayOfWeek{{DayOfTheWeek: Monday}},
+				DaysOfTheMonth:  []int{1},
+				MonthsOfTheYear: []int{3},
+				WeeksOfTheYear:  []int{10},
+				DaysOfTheYear:   []int{100},
+				SetPositions:    []int{1},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "interval 0",
+			rule:    RecurrenceRule{Frequency: FrequencyDaily, Interval: 0},
+			wantErr: true,
+		},
+		{
+			name:    "interval -1",
+			rule:    RecurrenceRule{Frequency: FrequencyDaily, Interval: -1},
+			wantErr: true,
+		},
+		{
+			name: "daysOfTheWeek on daily",
+			rule: RecurrenceRule{
+				Frequency:     FrequencyDaily,
+				Interval:      1,
+				DaysOfTheWeek: []RecurrenceDayOfWeek{{DayOfTheWeek: Monday}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "daysOfTheMonth on weekly",
+			rule: RecurrenceRule{
+				Frequency:      FrequencyWeekly,
+				Interval:       1,
+				DaysOfTheMonth: []int{15},
+			},
+			wantErr: true,
+		},
+		{
+			name: "monthsOfTheYear on monthly",
+			rule: RecurrenceRule{
+				Frequency:       FrequencyMonthly,
+				Interval:        1,
+				MonthsOfTheYear: []int{6},
+			},
+			wantErr: true,
+		},
+		{
+			name: "weeksOfTheYear on monthly",
+			rule: RecurrenceRule{
+				Frequency:      FrequencyMonthly,
+				Interval:       1,
+				WeeksOfTheYear: []int{10},
+			},
+			wantErr: true,
+		},
+		{
+			name: "daysOfTheYear on weekly",
+			rule: RecurrenceRule{
+				Frequency:     FrequencyWeekly,
+				Interval:      1,
+				DaysOfTheYear: []int{100},
+			},
+			wantErr: true,
+		},
+		{
+			name: "setPositions without any constraint arrays",
+			rule: RecurrenceRule{
+				Frequency:    FrequencyMonthly,
+				Interval:     1,
+				SetPositions: []int{-1},
+			},
+			wantErr: true,
+		},
+		{
+			name: "end with occurrenceCount 0",
+			rule: RecurrenceRule{
+				Frequency: FrequencyDaily,
+				Interval:  1,
+				End:       &RecurrenceEnd{OccurrenceCount: 0},
+			},
+			wantErr: true,
+		},
+		{
+			name: "end with valid count",
+			rule: RecurrenceRule{
+				Frequency: FrequencyDaily,
+				Interval:  1,
+				End:       &RecurrenceEnd{OccurrenceCount: 10},
+			},
+			wantErr: false,
+		},
+		{
+			name: "end with endDate",
+			rule: RecurrenceRule{
+				Frequency: FrequencyWeekly,
+				Interval:  1,
+				End:       &RecurrenceEnd{EndDate: &endDate},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "bare daily no constraints",
+			rule:    Daily(1),
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.rule.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr = %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 // --- Recurrence rule enum values match EventKit ---
 
 func TestRecurrenceEnumValues(t *testing.T) {
