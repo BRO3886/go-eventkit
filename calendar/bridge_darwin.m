@@ -8,23 +8,6 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-// Thread-local error message.
-static __thread char* cal_last_error = NULL;
-
-static void cal_set_error(NSString* msg) {
-    if (cal_last_error) {
-        free(cal_last_error);
-        cal_last_error = NULL;
-    }
-    if (msg) {
-        cal_last_error = strdup([msg UTF8String]);
-    }
-}
-
-const char* ek_cal_last_error(void) {
-    return cal_last_error;
-}
-
 void ek_cal_free(char* ptr) {
     if (ptr) free(ptr);
 }
@@ -121,11 +104,7 @@ static NSString* format_date(NSDate* date) {
 static char* to_json(id obj) {
     NSError* error = nil;
     NSData* data = [NSJSONSerialization dataWithJSONObject:obj options:0 error:&error];
-    if (!data) {
-        cal_set_error([NSString stringWithFormat:@"JSON serialization failed: %@",
-            error.localizedDescription]);
-        return NULL;
-    }
+    if (!data) return NULL;
     NSString* str = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     return strdup([str UTF8String]);
 }
@@ -355,9 +334,9 @@ static EKCalendar* find_calendar_by_id(EKEventStore* store, NSString* calId) {
 
 // --- Public API ---
 
-int ek_cal_request_access(void) {
+ek_result_t ek_cal_request_access(void) {
     @autoreleasepool {
-        cal_set_error(nil);
+        ek_result_t res = {NULL, NULL};
         EKEventStore* store = get_store();
 
         __block BOOL granted = NO;
@@ -384,20 +363,21 @@ int ek_cal_request_access(void) {
 
         if (!granted) {
             if (accessError) {
-                cal_set_error([NSString stringWithFormat:@"calendar access denied: %@",
-                    accessError.localizedDescription]);
+                res.error = strdup([[NSString stringWithFormat:@"calendar access denied: %@",
+                    accessError.localizedDescription] UTF8String]);
             } else {
-                cal_set_error(@"calendar access denied");
+                res.error = strdup([@"calendar access denied" UTF8String]);
             }
-            return 0;
+            return res;
         }
-        return 1;
+        res.result = strdup("1");
+        return res;
     }
 }
 
-char* ek_cal_fetch_calendars(void) {
+ek_result_t ek_cal_fetch_calendars(void) {
     @autoreleasepool {
-        cal_set_error(nil);
+        ek_result_t res = {NULL, NULL};
         EKEventStore* store = get_store();
         NSArray<EKCalendar*>* calendars = [store calendarsForEntityType:EKEntityTypeEvent];
 
@@ -406,22 +386,24 @@ char* ek_cal_fetch_calendars(void) {
             [result addObject:calendar_to_dict(cal)];
         }
 
-        return to_json(result);
+        res.result = to_json(result);
+        if (!res.result) res.error = strdup("JSON serialization failed");
+        return res;
     }
 }
 
-char* ek_cal_fetch_events(const char* start_date, const char* end_date,
+ek_result_t ek_cal_fetch_events(const char* start_date, const char* end_date,
                            const char* calendar_id, const char* search_query) {
     @autoreleasepool {
-        cal_set_error(nil);
+        ek_result_t res = {NULL, NULL};
         EKEventStore* store = get_store();
 
         NSDate* start = parse_iso_date(start_date);
         NSDate* end = parse_iso_date(end_date);
 
         if (!start || !end) {
-            cal_set_error(@"invalid date range: start and end dates are required");
-            return NULL;
+            res.error = strdup([@"invalid date range: start and end dates are required" UTF8String]);
+            return res;
         }
 
         // Build calendar filter.
@@ -436,8 +418,8 @@ char* ek_cal_fetch_events(const char* start_date, const char* end_date,
             if (cal) {
                 calendars = @[cal];
             } else {
-                cal_set_error([NSString stringWithFormat:@"calendar not found: %s", calendar_id]);
-                return NULL;
+                res.error = strdup([[NSString stringWithFormat:@"calendar not found: %s", calendar_id] UTF8String]);
+                return res;
             }
         }
 
@@ -469,16 +451,18 @@ char* ek_cal_fetch_events(const char* start_date, const char* end_date,
             [result addObject:event_to_dict(e)];
         }
 
-        return to_json(result);
+        res.result = to_json(result);
+        if (!res.result) res.error = strdup("JSON serialization failed");
+        return res;
     }
 }
 
-char* ek_cal_get_event(const char* event_id) {
+ek_result_t ek_cal_get_event(const char* event_id) {
     @autoreleasepool {
-        cal_set_error(nil);
+        ek_result_t res = {NULL, NULL};
         if (!event_id) {
-            cal_set_error(@"event ID is required");
-            return NULL;
+            res.error = strdup([@"event ID is required" UTF8String]);
+            return res;
         }
 
         EKEventStore* store = get_store();
@@ -487,7 +471,9 @@ char* ek_cal_get_event(const char* event_id) {
         // Try eventWithIdentifier first (exact match).
         EKEvent* event = [store eventWithIdentifier:eid];
         if (event) {
-            return to_json(event_to_dict(event));
+            res.result = to_json(event_to_dict(event));
+            if (!res.result) res.error = strdup("JSON serialization failed");
+            return res;
         }
 
         // Prefix match: search events in a broad range and match by prefix.
@@ -502,21 +488,23 @@ char* ek_cal_get_event(const char* event_id) {
         for (EKEvent* e in events) {
             NSString* eId = [e.eventIdentifier uppercaseString];
             if ([eId hasPrefix:upperTarget]) {
-                return to_json(event_to_dict(e));
+                res.result = to_json(event_to_dict(e));
+                if (!res.result) res.error = strdup("JSON serialization failed");
+                return res;
             }
         }
 
-        cal_set_error([NSString stringWithFormat:@"event not found: %s", event_id]);
-        return NULL;
+        res.error = strdup([[NSString stringWithFormat:@"event not found: %s", event_id] UTF8String]);
+        return res;
     }
 }
 
-char* ek_cal_create_event(const char* json_input) {
+ek_result_t ek_cal_create_event(const char* json_input) {
     @autoreleasepool {
-        cal_set_error(nil);
+        ek_result_t res = {NULL, NULL};
         if (!json_input) {
-            cal_set_error(@"JSON input is required");
-            return NULL;
+            res.error = strdup([@"JSON input is required" UTF8String]);
+            return res;
         }
 
         EKEventStore* store = get_store();
@@ -526,8 +514,8 @@ char* ek_cal_create_event(const char* json_input) {
         NSError* parseError = nil;
         NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
         if (!input) {
-            cal_set_error([NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription]);
-            return NULL;
+            res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
+            return res;
         }
 
         EKEvent* event = [EKEvent eventWithEventStore:store];
@@ -538,8 +526,8 @@ char* ek_cal_create_event(const char* json_input) {
         NSDate* startDate = parse_iso_date([input[@"startDate"] UTF8String]);
         NSDate* endDate = parse_iso_date([input[@"endDate"] UTF8String]);
         if (!startDate || !endDate) {
-            cal_set_error(@"startDate and endDate are required");
-            return NULL;
+            res.error = strdup([@"startDate and endDate are required" UTF8String]);
+            return res;
         }
         event.startDate = startDate;
         event.endDate = endDate;
@@ -571,8 +559,8 @@ char* ek_cal_create_event(const char* json_input) {
             NSString* calName = input[@"calendar"];
             EKCalendar* cal = find_calendar_by_name(store, calName);
             if (!cal) {
-                cal_set_error([NSString stringWithFormat:@"calendar not found: %@", calName]);
-                return NULL;
+                res.error = strdup([[NSString stringWithFormat:@"calendar not found: %@", calName] UTF8String]);
+                return res;
             }
             event.calendar = cal;
         } else {
@@ -675,21 +663,23 @@ char* ek_cal_create_event(const char* json_input) {
         NSError* saveError = nil;
         BOOL saved = [store saveEvent:event span:EKSpanThisEvent commit:YES error:&saveError];
         if (!saved) {
-            cal_set_error([NSString stringWithFormat:@"failed to save event: %@",
-                saveError.localizedDescription]);
-            return NULL;
+            res.error = strdup([[NSString stringWithFormat:@"failed to save event: %@",
+                saveError.localizedDescription] UTF8String]);
+            return res;
         }
 
-        return to_json(event_to_dict(event));
+        res.result = to_json(event_to_dict(event));
+        if (!res.result) res.error = strdup("JSON serialization failed");
+        return res;
     }
 }
 
-char* ek_cal_update_event(const char* event_id, const char* json_input, int span) {
+ek_result_t ek_cal_update_event(const char* event_id, const char* json_input, int span) {
     @autoreleasepool {
-        cal_set_error(nil);
+        ek_result_t res = {NULL, NULL};
         if (!event_id || !json_input) {
-            cal_set_error(@"event ID and JSON input are required");
-            return NULL;
+            res.error = strdup([@"event ID and JSON input are required" UTF8String]);
+            return res;
         }
 
         EKEventStore* store = get_store();
@@ -697,8 +687,8 @@ char* ek_cal_update_event(const char* event_id, const char* json_input, int span
 
         EKEvent* event = [store eventWithIdentifier:eid];
         if (!event) {
-            cal_set_error([NSString stringWithFormat:@"event not found: %s", event_id]);
-            return NULL;
+            res.error = strdup([[NSString stringWithFormat:@"event not found: %s", event_id] UTF8String]);
+            return res;
         }
 
         // Parse JSON input.
@@ -706,8 +696,8 @@ char* ek_cal_update_event(const char* event_id, const char* json_input, int span
         NSError* parseError = nil;
         NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
         if (!input) {
-            cal_set_error([NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription]);
-            return NULL;
+            res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
+            return res;
         }
 
         // Update fields that are present in input.
@@ -764,8 +754,8 @@ char* ek_cal_update_event(const char* event_id, const char* json_input, int span
             NSString* calName = input[@"calendar"];
             EKCalendar* cal = find_calendar_by_name(store, calName);
             if (!cal) {
-                cal_set_error([NSString stringWithFormat:@"calendar not found: %@", calName]);
-                return NULL;
+                res.error = strdup([[NSString stringWithFormat:@"calendar not found: %@", calName] UTF8String]);
+                return res;
             }
             event.calendar = cal;
         }
@@ -880,12 +870,14 @@ char* ek_cal_update_event(const char* event_id, const char* json_input, int span
         NSError* saveError = nil;
         BOOL saved = [store saveEvent:event span:ekSpan commit:YES error:&saveError];
         if (!saved) {
-            cal_set_error([NSString stringWithFormat:@"failed to update event: %@",
-                saveError.localizedDescription]);
-            return NULL;
+            res.error = strdup([[NSString stringWithFormat:@"failed to update event: %@",
+                saveError.localizedDescription] UTF8String]);
+            return res;
         }
 
-        return to_json(event_to_dict(event));
+        res.result = to_json(event_to_dict(event));
+        if (!res.result) res.error = strdup("JSON serialization failed");
+        return res;
     }
 }
 
@@ -935,12 +927,12 @@ static CGColorRef parse_hex_color(NSString* hex) {
 
 // --- Calendar CRUD ---
 
-char* ek_cal_create_calendar(const char* json_input) {
+ek_result_t ek_cal_create_calendar(const char* json_input) {
     @autoreleasepool {
-        cal_set_error(nil);
+        ek_result_t res = {NULL, NULL};
         if (!json_input) {
-            cal_set_error(@"JSON input is required");
-            return NULL;
+            res.error = strdup([@"JSON input is required" UTF8String]);
+            return res;
         }
 
         EKEventStore* store = get_store();
@@ -950,8 +942,8 @@ char* ek_cal_create_calendar(const char* json_input) {
         NSError* parseError = nil;
         NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
         if (!input) {
-            cal_set_error([NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription]);
-            return NULL;
+            res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
+            return res;
         }
 
         EKCalendar* cal = [EKCalendar calendarForEntityType:EKEntityTypeEvent eventStore:store];
@@ -962,8 +954,8 @@ char* ek_cal_create_calendar(const char* json_input) {
         // Source (required — validated in Go layer).
         EKSource* source = find_source_by_name(store, input[@"source"]);
         if (!source) {
-            cal_set_error([NSString stringWithFormat:@"source not found: %@", input[@"source"]]);
-            return NULL;
+            res.error = strdup([[NSString stringWithFormat:@"source not found: %@", input[@"source"]] UTF8String]);
+            return res;
         }
         cal.source = source;
 
@@ -980,21 +972,23 @@ char* ek_cal_create_calendar(const char* json_input) {
         NSError* saveError = nil;
         BOOL saved = [store saveCalendar:cal commit:YES error:&saveError];
         if (!saved) {
-            cal_set_error([NSString stringWithFormat:@"failed to save calendar: %@",
-                saveError.localizedDescription]);
-            return NULL;
+            res.error = strdup([[NSString stringWithFormat:@"failed to save calendar: %@",
+                saveError.localizedDescription] UTF8String]);
+            return res;
         }
 
-        return to_json(calendar_to_dict(cal));
+        res.result = to_json(calendar_to_dict(cal));
+        if (!res.result) res.error = strdup("JSON serialization failed");
+        return res;
     }
 }
 
-char* ek_cal_update_calendar(const char* calendar_id, const char* json_input) {
+ek_result_t ek_cal_update_calendar(const char* calendar_id, const char* json_input) {
     @autoreleasepool {
-        cal_set_error(nil);
+        ek_result_t res = {NULL, NULL};
         if (!calendar_id || !json_input) {
-            cal_set_error(@"calendar ID and JSON input are required");
-            return NULL;
+            res.error = strdup([@"calendar ID and JSON input are required" UTF8String]);
+            return res;
         }
 
         EKEventStore* store = get_store();
@@ -1002,14 +996,14 @@ char* ek_cal_update_calendar(const char* calendar_id, const char* json_input) {
 
         EKCalendar* cal = find_calendar_by_id(store, calId);
         if (!cal) {
-            cal_set_error([NSString stringWithFormat:@"calendar not found: %s", calendar_id]);
-            return NULL;
+            res.error = strdup([[NSString stringWithFormat:@"calendar not found: %s", calendar_id] UTF8String]);
+            return res;
         }
 
         // Check immutability.
         if (cal.isImmutable) {
-            cal_set_error([NSString stringWithFormat:@"calendar is immutable: %@", cal.title]);
-            return NULL;
+            res.error = strdup([[NSString stringWithFormat:@"calendar is immutable: %@", cal.title] UTF8String]);
+            return res;
         }
 
         // Parse JSON input.
@@ -1017,8 +1011,8 @@ char* ek_cal_update_calendar(const char* calendar_id, const char* json_input) {
         NSError* parseError = nil;
         NSDictionary* input = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
         if (!input) {
-            cal_set_error([NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription]);
-            return NULL;
+            res.error = strdup([[NSString stringWithFormat:@"invalid JSON: %@", parseError.localizedDescription] UTF8String]);
+            return res;
         }
 
         // Update title.
@@ -1039,21 +1033,23 @@ char* ek_cal_update_calendar(const char* calendar_id, const char* json_input) {
         NSError* saveError = nil;
         BOOL saved = [store saveCalendar:cal commit:YES error:&saveError];
         if (!saved) {
-            cal_set_error([NSString stringWithFormat:@"failed to update calendar: %@",
-                saveError.localizedDescription]);
-            return NULL;
+            res.error = strdup([[NSString stringWithFormat:@"failed to update calendar: %@",
+                saveError.localizedDescription] UTF8String]);
+            return res;
         }
 
-        return to_json(calendar_to_dict(cal));
+        res.result = to_json(calendar_to_dict(cal));
+        if (!res.result) res.error = strdup("JSON serialization failed");
+        return res;
     }
 }
 
-char* ek_cal_delete_calendar(const char* calendar_id) {
+ek_result_t ek_cal_delete_calendar(const char* calendar_id) {
     @autoreleasepool {
-        cal_set_error(nil);
+        ek_result_t res = {NULL, NULL};
         if (!calendar_id) {
-            cal_set_error(@"calendar ID is required");
-            return NULL;
+            res.error = strdup([@"calendar ID is required" UTF8String]);
+            return res;
         }
 
         EKEventStore* store = get_store();
@@ -1061,34 +1057,35 @@ char* ek_cal_delete_calendar(const char* calendar_id) {
 
         EKCalendar* cal = find_calendar_by_id(store, calId);
         if (!cal) {
-            cal_set_error([NSString stringWithFormat:@"calendar not found: %s", calendar_id]);
-            return NULL;
+            res.error = strdup([[NSString stringWithFormat:@"calendar not found: %s", calendar_id] UTF8String]);
+            return res;
         }
 
         // Check immutability.
         if (cal.isImmutable) {
-            cal_set_error([NSString stringWithFormat:@"calendar is immutable: %@", cal.title]);
-            return NULL;
+            res.error = strdup([[NSString stringWithFormat:@"calendar is immutable: %@", cal.title] UTF8String]);
+            return res;
         }
 
         NSError* removeError = nil;
         BOOL removed = [store removeCalendar:cal commit:YES error:&removeError];
         if (!removed) {
-            cal_set_error([NSString stringWithFormat:@"failed to delete calendar: %@",
-                removeError.localizedDescription]);
-            return NULL;
+            res.error = strdup([[NSString stringWithFormat:@"failed to delete calendar: %@",
+                removeError.localizedDescription] UTF8String]);
+            return res;
         }
 
-        return strdup("ok");
+        res.result = strdup("ok");
+        return res;
     }
 }
 
-char* ek_cal_delete_event(const char* event_id, int span) {
+ek_result_t ek_cal_delete_event(const char* event_id, int span) {
     @autoreleasepool {
-        cal_set_error(nil);
+        ek_result_t res = {NULL, NULL};
         if (!event_id) {
-            cal_set_error(@"event ID is required");
-            return NULL;
+            res.error = strdup([@"event ID is required" UTF8String]);
+            return res;
         }
 
         EKEventStore* store = get_store();
@@ -1096,19 +1093,20 @@ char* ek_cal_delete_event(const char* event_id, int span) {
 
         EKEvent* event = [store eventWithIdentifier:eid];
         if (!event) {
-            cal_set_error([NSString stringWithFormat:@"event not found: %s", event_id]);
-            return NULL;
+            res.error = strdup([[NSString stringWithFormat:@"event not found: %s", event_id] UTF8String]);
+            return res;
         }
 
         EKSpan ekSpan = (span == 1) ? EKSpanFutureEvents : EKSpanThisEvent;
         NSError* removeError = nil;
         BOOL removed = [store removeEvent:event span:ekSpan commit:YES error:&removeError];
         if (!removed) {
-            cal_set_error([NSString stringWithFormat:@"failed to delete event: %@",
-                removeError.localizedDescription]);
-            return NULL;
+            res.error = strdup([[NSString stringWithFormat:@"failed to delete event: %@",
+                removeError.localizedDescription] UTF8String]);
+            return res;
         }
 
-        return strdup("ok");
+        res.result = strdup("ok");
+        return res;
     }
 }
