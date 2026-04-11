@@ -288,8 +288,7 @@ func marshalCreateInput(input CreateReminderInput) (string, error) {
 			alarm := map[string]any{}
 			if a.AbsoluteDate != nil {
 				alarm["absoluteDate"] = a.AbsoluteDate.UTC().Format("2006-01-02T15:04:05.000Z")
-			}
-			if a.RelativeOffset != 0 {
+			} else {
 				alarm["relativeOffset"] = a.RelativeOffset.Seconds()
 			}
 			alarms[i] = alarm
@@ -351,8 +350,7 @@ func marshalUpdateInput(input UpdateReminderInput) (string, error) {
 			alarm := map[string]any{}
 			if a.AbsoluteDate != nil {
 				alarm["absoluteDate"] = a.AbsoluteDate.UTC().Format("2006-01-02T15:04:05.000Z")
-			}
-			if a.RelativeOffset != 0 {
+			} else {
 				alarm["relativeOffset"] = a.RelativeOffset.Seconds()
 			}
 			alarms[i] = alarm

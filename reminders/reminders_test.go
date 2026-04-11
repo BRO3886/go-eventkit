@@ -438,6 +438,31 @@ func TestMarshalCreateInput(t *testing.T) {
 			t.Fatalf("alarms len = %d, want 2", len(alarms))
 		}
 	})
+
+	t.Run("alarm with zero relative offset", func(t *testing.T) {
+		input := CreateReminderInput{
+			Title:  "At due time",
+			Alarms: []Alarm{{RelativeOffset: 0}},
+		}
+		jsonStr, err := marshalCreateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+		alarms := m["alarms"].([]any)
+		if len(alarms) != 1 {
+			t.Fatalf("alarms len = %d, want 1", len(alarms))
+		}
+		a := alarms[0].(map[string]any)
+		offset, ok := a["relativeOffset"]
+		if !ok {
+			t.Fatal("relativeOffset key missing — zero offset must be serialized")
+		}
+		if offset != 0.0 {
+			t.Errorf("relativeOffset = %v, want 0", offset)
+		}
+	})
 }
 
 // --- Marshal Update Input Tests ---

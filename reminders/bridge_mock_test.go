@@ -414,6 +414,27 @@ func TestMockUpdateReminderJSON(t *testing.T) {
 			t.Errorf("alarms = %d, want 0", len(a))
 		}
 	})
+
+	t.Run("zero relative offset alarm", func(t *testing.T) {
+		alarms := []Alarm{{RelativeOffset: 0}}
+		data, _ := marshalUpdateInput(UpdateReminderInput{Alarms: &alarms})
+
+		var m map[string]any
+		json.Unmarshal([]byte(data), &m)
+
+		a := m["alarms"].([]any)
+		if len(a) != 1 {
+			t.Fatalf("alarms = %d, want 1", len(a))
+		}
+		alarm := a[0].(map[string]any)
+		offset, ok := alarm["relativeOffset"]
+		if !ok {
+			t.Fatal("relativeOffset key missing — zero offset must be serialized")
+		}
+		if offset != 0.0 {
+			t.Errorf("relativeOffset = %v, want 0", offset)
+		}
+	})
 }
 
 func TestMockAlarmRoundtrip(t *testing.T) {
