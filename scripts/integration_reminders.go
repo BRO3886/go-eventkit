@@ -244,7 +244,7 @@ func main() {
 			alarmReminder.Title, alarmReminder.HasAlarms, len(alarmReminder.Alarms))
 	}
 
-	// --- Test 15: Create reminder with URL ---
+	// --- Test 15: Create reminder with URL (verifies REMURLAttachment round-trip) ---
 	urlReminder, err := client.CreateReminder(reminders.CreateReminderInput{
 		Title:    "[go-eventkit test] URL Reminder",
 		ListName: defaultList,
@@ -257,6 +257,57 @@ func main() {
 	if err == nil {
 		urlReminderID = urlReminder.ID
 		log.Printf("  Created URL reminder: %q, URL=%s", urlReminder.Title, urlReminder.URL)
+		if urlReminder.URL != "https://example.com/test" {
+			log.Printf("FAIL: URL round-trip mismatch: got %q, want %q", urlReminder.URL, "https://example.com/test")
+			failed++
+		} else {
+			// Fetch fresh to confirm the URL survived persistence (not just cached in the in-memory object).
+			refetched, rerr := client.Reminder(urlReminderID)
+			if rerr != nil {
+				log.Printf("FAIL: could not refetch URL reminder: %v", rerr)
+				failed++
+			} else if refetched.URL != "https://example.com/test" {
+				log.Printf("FAIL: URL did not persist: got %q, want %q", refetched.URL, "https://example.com/test")
+				failed++
+			} else {
+				log.Printf("PASS: URL persisted correctly on fresh fetch")
+				passed++
+			}
+		}
+
+		// Update the URL to a new value and verify it replaces cleanly.
+		newURL := "https://github.com/BRO3886/rem"
+		_, uerr := client.UpdateReminder(urlReminderID, reminders.UpdateReminderInput{URL: &newURL})
+		if uerr != nil {
+			log.Printf("FAIL: UpdateReminder with new URL: %v", uerr)
+			failed++
+		} else {
+			updated, _ := client.Reminder(urlReminderID)
+			if updated != nil && updated.URL == newURL {
+				log.Printf("PASS: URL update replaced cleanly")
+				passed++
+			} else {
+				log.Printf("FAIL: URL update did not take: got %q, want %q", updated.URL, newURL)
+				failed++
+			}
+		}
+
+		// Clear the URL by setting to empty string and verify read-back returns empty.
+		empty := ""
+		_, cerr := client.UpdateReminder(urlReminderID, reminders.UpdateReminderInput{URL: &empty})
+		if cerr != nil {
+			log.Printf("FAIL: UpdateReminder clearing URL: %v", cerr)
+			failed++
+		} else {
+			cleared, _ := client.Reminder(urlReminderID)
+			if cleared != nil && cleared.URL == "" {
+				log.Printf("PASS: URL cleared successfully")
+				passed++
+			} else {
+				log.Printf("FAIL: URL not cleared: got %q", cleared.URL)
+				failed++
+			}
+		}
 	}
 
 	// --- Test 16: Create reminder with relative offset alarm ---

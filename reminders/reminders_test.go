@@ -463,6 +463,22 @@ func TestMarshalCreateInput(t *testing.T) {
 			t.Errorf("relativeOffset = %v, want 0", offset)
 		}
 	})
+
+	// The ObjC bridge only writes a REMURLAttachment when the url key is
+	// present. An empty URL on create should be omitted so no attachment
+	// save is triggered for the common no-URL case.
+	t.Run("empty URL omitted from create", func(t *testing.T) {
+		input := CreateReminderInput{Title: "No URL"}
+		jsonStr, err := marshalCreateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+		if _, ok := m["url"]; ok {
+			t.Error("url should not be present when empty")
+		}
+	})
 }
 
 // --- Marshal Update Input Tests ---
@@ -534,6 +550,56 @@ func TestMarshalUpdateInput(t *testing.T) {
 		json.Unmarshal([]byte(jsonStr), &m)
 		if m["listName"] != "Work" {
 			t.Errorf("listName = %v", m["listName"])
+		}
+	})
+
+	t.Run("set URL", func(t *testing.T) {
+		url := "https://example.com/page"
+		input := UpdateReminderInput{URL: &url}
+		jsonStr, err := marshalUpdateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+		if m["url"] != url {
+			t.Errorf("url = %v, want %q", m["url"], url)
+		}
+	})
+
+	// Clearing the URL is done by setting it to empty string. The bridge
+	// uses presence of the url key to decide whether to touch the attachment,
+	// so an empty string MUST serialize through (unlike the create path where
+	// empty URLs are omitted because there's nothing to clear yet).
+	t.Run("clear URL with empty string", func(t *testing.T) {
+		empty := ""
+		input := UpdateReminderInput{URL: &empty}
+		jsonStr, err := marshalUpdateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+		if _, ok := m["url"]; !ok {
+			t.Fatal("url key must be present (empty string = clear signal)")
+		}
+		if m["url"] != "" {
+			t.Errorf("url = %v, want empty string", m["url"])
+		}
+	})
+
+	// nil URL means "don't touch it" — must not emit the key.
+	t.Run("omit URL when nil", func(t *testing.T) {
+		title := "unrelated"
+		input := UpdateReminderInput{Title: &title}
+		jsonStr, err := marshalUpdateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+		if _, ok := m["url"]; ok {
+			t.Error("url key should not be present when UpdateReminderInput.URL is nil")
 		}
 	})
 
