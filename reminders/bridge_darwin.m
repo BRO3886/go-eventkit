@@ -1,7 +1,10 @@
 #import <EventKit/EventKit.h>
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
 #include "bridge_darwin.h"
+#include <dlfcn.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -114,6 +117,134 @@ static char* to_json(id obj) {
     return strdup([str UTF8String]);
 }
 
+// --- ReminderKit private framework bridge (for URL field in Reminders.app) ---
+//
+// EKCalendarItem.URL is completely disconnected from the URL field shown in
+// Reminders.app. The real URL field is stored as a REMURLAttachment object on
+// the underlying REMReminder, which lives in the private ReminderKit framework.
+//
+// This bridge uses runtime introspection to access REMReminder/REMSaveRequest
+// and set/read URL attachments. It is guarded by respondsToSelector: and
+// isKindOfClass: checks so it silently no-ops if Apple ever changes the
+// private API in a future macOS release. On failure it falls back to
+// EKCalendarItem.URL which remains writable.
+
+static BOOL load_reminderkit(void) {
+    static BOOL loaded = NO;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        void* h1 = dlopen("/System/Library/PrivateFrameworks/ReminderKit.framework/ReminderKit", RTLD_NOW | RTLD_LAZY);
+        void* h2 = dlopen("/System/Library/PrivateFrameworks/ReminderKitInternal.framework/ReminderKitInternal", RTLD_NOW | RTLD_LAZY);
+        loaded = (h1 != NULL && h2 != NULL);
+    });
+    return loaded;
+}
+
+// Walk the ivar list of cls and its superclasses to find an ivar by name.
+static Ivar find_ivar(Class cls, const char* name) {
+    while (cls) {
+        Ivar v = class_getInstanceVariable(cls, name);
+        if (v) return v;
+        cls = class_getSuperclass(cls);
+    }
+    return NULL;
+}
+
+// Extract REMReminder from an EKReminder via backingObject._remObject.
+// Returns nil if the private class layout has changed.
+static id rem_reminder_from_ek(EKReminder* r) {
+    if (!r) return nil;
+    SEL boSel = NSSelectorFromString(@"backingObject");
+    if (![r respondsToSelector:boSel]) return nil;
+    id bo = ((id(*)(id,SEL))objc_msgSend)(r, boSel);
+    if (!bo) return nil;
+    Ivar ri = find_ivar([bo class], "_remObject");
+    if (!ri) return nil;
+    id remObj = object_getIvar(bo, ri);
+    Class remReminderClass = objc_getClass("REMReminder");
+    if (!remReminderClass || ![remObj isKindOfClass:remReminderClass]) return nil;
+    return remObj;
+}
+
+// Read the first URL attachment (as NSString) from a REMReminder, or nil if none.
+static NSString* read_url_attachment(id remReminder) {
+    if (!remReminder) return nil;
+    SEL ctxSel = NSSelectorFromString(@"attachmentContext");
+    if (![remReminder respondsToSelector:ctxSel]) return nil;
+    id ctx = ((id(*)(id,SEL))objc_msgSend)(remReminder, ctxSel);
+    if (!ctx) return nil;
+    SEL urlAttsSel = NSSelectorFromString(@"urlAttachments");
+    if (![ctx respondsToSelector:urlAttsSel]) return nil;
+    id atts = ((id(*)(id,SEL))objc_msgSend)(ctx, urlAttsSel);
+    if (!atts || ![atts respondsToSelector:@selector(count)] || [atts count] == 0) return nil;
+    id first = [atts firstObject];
+    SEL urlSel = NSSelectorFromString(@"url");
+    if (![first respondsToSelector:urlSel]) return nil;
+    id u = ((id(*)(id,SEL))objc_msgSend)(first, urlSel);
+    if ([u isKindOfClass:[NSURL class]]) return [(NSURL*)u absoluteString];
+    if ([u isKindOfClass:[NSString class]]) return (NSString*)u;
+    return nil;
+}
+
+// Write a URL attachment to an EKReminder via the private ReminderKit save path.
+// If url is nil or empty, removes any existing URL attachment.
+// Returns YES on success. On failure (private API unavailable, save errored),
+// returns NO — caller should fall back to EKCalendarItem.URL.
+static BOOL write_url_attachment(EKReminder* ekReminder, NSString* url) {
+    if (!load_reminderkit()) return NO;
+    id remReminder = rem_reminder_from_ek(ekReminder);
+    if (!remReminder) return NO;
+
+    // Get REMStore — via ivar _store first, then -store method as fallback.
+    id remStore = nil;
+    Ivar storeIvar = find_ivar([remReminder class], "_store");
+    if (storeIvar) remStore = object_getIvar(remReminder, storeIvar);
+    if (!remStore) {
+        SEL storeSel = NSSelectorFromString(@"store");
+        if ([remReminder respondsToSelector:storeSel]) {
+            remStore = ((id(*)(id,SEL))objc_msgSend)(remReminder, storeSel);
+        }
+    }
+    Class remStoreClass = objc_getClass("REMStore");
+    if (!remStore || !remStoreClass || ![remStore isKindOfClass:remStoreClass]) return NO;
+
+    Class saveReqClass = objc_getClass("REMSaveRequest");
+    if (!saveReqClass) return NO;
+    id saveReq = [saveReqClass alloc];
+    SEL initSel = NSSelectorFromString(@"initWithStore:");
+    if (![saveReq respondsToSelector:initSel]) return NO;
+    saveReq = ((id(*)(id,SEL,id))objc_msgSend)(saveReq, initSel, remStore);
+    if (!saveReq) return NO;
+
+    SEL updateSel = NSSelectorFromString(@"updateReminder:");
+    if (![saveReq respondsToSelector:updateSel]) return NO;
+    id changeItem = ((id(*)(id,SEL,id))objc_msgSend)(saveReq, updateSel, remReminder);
+    if (!changeItem) return NO;
+
+    SEL ctxSel = NSSelectorFromString(@"attachmentContext");
+    if (![changeItem respondsToSelector:ctxSel]) return NO;
+    id attachCtx = ((id(*)(id,SEL))objc_msgSend)(changeItem, ctxSel);
+    if (!attachCtx) return NO;
+
+    if (url && url.length > 0) {
+        SEL setURLAttSel = NSSelectorFromString(@"setURLAttachmentWithURL:");
+        if (![attachCtx respondsToSelector:setURLAttSel]) return NO;
+        NSURL* u = [NSURL URLWithString:url];
+        if (!u) return NO;
+        ((void(*)(id,SEL,id))objc_msgSend)(attachCtx, setURLAttSel, u);
+    } else {
+        SEL removeAllSel = NSSelectorFromString(@"removeURLAttachments");
+        if (![attachCtx respondsToSelector:removeAllSel]) return NO;
+        ((void(*)(id,SEL))objc_msgSend)(attachCtx, removeAllSel);
+    }
+
+    SEL saveSel = NSSelectorFromString(@"saveSynchronouslyWithError:");
+    if (![saveReq respondsToSelector:saveSel]) return NO;
+    NSError* err = nil;
+    BOOL saved = ((BOOL(*)(id,SEL,NSError**))objc_msgSend)(saveReq, saveSel, &err);
+    return saved;
+}
+
 // --- Synchronous reminder fetch (dispatch_semaphore for async API) ---
 
 static NSArray<EKReminder*>* fetch_all_reminders(NSArray<EKCalendar*>* calendars) {
@@ -156,12 +287,18 @@ static NSDictionary* reminder_to_dict(EKReminder* r) {
         }
     }
 
-    // URL (notes may contain URL).
-    if (r.URL) {
-        d[@"url"] = [r.URL absoluteString];
-    } else {
-        d[@"url"] = [NSNull null];
+    // URL: prefer the REMURLAttachment (what Reminders.app actually shows in
+    // its URL field), fall back to EKCalendarItem.URL (which rem used to
+    // write but Reminders.app ignores).
+    NSString* urlStr = nil;
+    if (load_reminderkit()) {
+        id remReminder = rem_reminder_from_ek(r);
+        urlStr = read_url_attachment(remReminder);
     }
+    if (!urlStr && r.URL) {
+        urlStr = [r.URL absoluteString];
+    }
+    d[@"url"] = urlStr ?: (id)[NSNull null];
 
     // Recurrence rules.
     d[@"recurring"] = r.hasRecurrenceRules ? @YES : @NO;
@@ -634,6 +771,19 @@ ek_result_t ek_rem_create_reminder(const char* json_input) {
                 return;
             }
 
+            // URL goes into a REMURLAttachment via the private ReminderKit API
+            // (Reminders.app only displays URLs stored this way, not the public
+            // EKCalendarItem.URL). Must happen AFTER save so the REMReminder exists.
+            if (input[@"url"] && input[@"url"] != [NSNull null]) {
+                NSString* urlStr = input[@"url"];
+                // Re-fetch to ensure the REMReminder is populated on the just-saved instance.
+                EKReminder* fresh = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
+                if (fresh) {
+                    write_url_attachment(fresh, urlStr);
+                    reminder = fresh;
+                }
+            }
+
             res.result = to_json(reminder_to_dict(reminder));
             if (!res.result) res.error = strdup("JSON serialization failed");
         }
@@ -824,6 +974,21 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
                 res.error = strdup([[NSString stringWithFormat:@"failed to update reminder: %@",
                     saveError.localizedDescription] UTF8String]);
                 return;
+            }
+
+            // URL attachment via private ReminderKit API (see create path).
+            // Applied after the EventKit save so the REMReminder is up to date.
+            // `url = nil` (NSNull) clears, a non-empty string sets, key absent = unchanged.
+            if (input[@"url"] != nil) {
+                EKReminder* fresh = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
+                if (fresh) {
+                    if (input[@"url"] == [NSNull null]) {
+                        write_url_attachment(fresh, nil);
+                    } else {
+                        write_url_attachment(fresh, input[@"url"]);
+                    }
+                    reminder = fresh;
+                }
             }
 
             res.result = to_json(reminder_to_dict(reminder));
