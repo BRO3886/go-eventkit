@@ -305,10 +305,12 @@ func main() {
 		if len(noAlarmEvent.Alerts) != 0 {
 			log.Printf("  FAIL: SuppressDefaultAlarms event has %d alerts, want 0: %+v",
 				len(noAlarmEvent.Alerts), noAlarmEvent.Alerts)
+			failed++
 		} else {
 			log.Printf("  Suppress-defaults event: %q, Alerts=0 (as expected)", noAlarmEvent.Title)
+			passed++
 		}
-		if err == nil && len(controlEvent.Alerts) > 0 {
+		if len(controlEvent.Alerts) > 0 {
 			log.Printf("  PROOF: control had %d default alarms, suppressed version has 0 — flag works.", len(controlEvent.Alerts))
 		} else {
 			log.Println("  NOTE: Home calendar appears to have no default alarms — suppression test is a soft-pass (assertion still holds, but nothing to suppress).")
@@ -337,11 +339,14 @@ func main() {
 		if len(mixedEvent.Alerts) != 1 {
 			log.Printf("  FAIL: mixed event has %d alerts, want exactly 1: %+v",
 				len(mixedEvent.Alerts), mixedEvent.Alerts)
+			failed++
 		} else if mixedEvent.Alerts[0].RelativeOffset != -30*time.Minute {
 			log.Printf("  FAIL: mixed event alert offset = %v, want -30m",
 				mixedEvent.Alerts[0].RelativeOffset)
+			failed++
 		} else {
 			log.Printf("  Created mixed event: %q, Alerts=1 (-30m, as expected)", mixedEvent.Title)
+			passed++
 		}
 	}
 
