@@ -270,18 +270,19 @@ func parseCalendarsJSON(jsonStr string) ([]Calendar, error) {
 // --- JSON marshaling for writes ---
 
 type createEventJSON struct {
-	Title              string                      `json:"title"`
-	StartDate          string                      `json:"startDate"`
-	EndDate            string                      `json:"endDate"`
-	AllDay             bool                        `json:"allDay"`
-	Location           string                      `json:"location,omitempty"`
-	Notes              string                      `json:"notes,omitempty"`
-	URL                string                      `json:"url,omitempty"`
-	Calendar           string                      `json:"calendar,omitempty"`
-	Alerts             []alertJSON                 `json:"alerts,omitempty"`
-	TimeZone           string                      `json:"timeZone,omitempty"`
-	RecurrenceRules    []recurrenceRuleJSON        `json:"recurrenceRules,omitempty"`
-	StructuredLocation *structuredLocationJSON     `json:"structuredLocation,omitempty"`
+	Title                 string                  `json:"title"`
+	StartDate             string                  `json:"startDate"`
+	EndDate               string                  `json:"endDate"`
+	AllDay                bool                    `json:"allDay"`
+	Location              string                  `json:"location,omitempty"`
+	Notes                 string                  `json:"notes,omitempty"`
+	URL                   string                  `json:"url,omitempty"`
+	Calendar              string                  `json:"calendar,omitempty"`
+	Alerts                []alertJSON             `json:"alerts,omitempty"`
+	SuppressDefaultAlarms bool                    `json:"suppressDefaultAlarms,omitempty"`
+	TimeZone              string                  `json:"timeZone,omitempty"`
+	RecurrenceRules       []recurrenceRuleJSON    `json:"recurrenceRules,omitempty"`
+	StructuredLocation    *structuredLocationJSON `json:"structuredLocation,omitempty"`
 }
 
 type alertJSON struct {
@@ -363,15 +364,16 @@ func marshalStructuredLocation(sl *eventkit.StructuredLocation) *structuredLocat
 
 func marshalCreateInput(input CreateEventInput) ([]byte, error) {
 	j := createEventJSON{
-		Title:     input.Title,
-		StartDate: input.StartDate.UTC().Format("2006-01-02T15:04:05.000Z"),
-		EndDate:   input.EndDate.UTC().Format("2006-01-02T15:04:05.000Z"),
-		AllDay:    input.AllDay,
-		Location:  input.Location,
-		Notes:     input.Notes,
-		URL:       input.URL,
-		Calendar:  input.Calendar,
-		TimeZone:  input.TimeZone,
+		Title:                 input.Title,
+		StartDate:             input.StartDate.UTC().Format("2006-01-02T15:04:05.000Z"),
+		EndDate:               input.EndDate.UTC().Format("2006-01-02T15:04:05.000Z"),
+		AllDay:                input.AllDay,
+		Location:              input.Location,
+		Notes:                 input.Notes,
+		URL:                   input.URL,
+		Calendar:              input.Calendar,
+		TimeZone:              input.TimeZone,
+		SuppressDefaultAlarms: input.SuppressDefaultAlarms,
 	}
 
 	if len(input.Alerts) > 0 {
