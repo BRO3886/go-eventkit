@@ -71,6 +71,8 @@ go-eventkit/
 - **dateparser**: `dateparser/` package — COMPLETE. Shared natural language date parser for cal + rem CLIs. 3 options (`WithDefaultHour`, `WithSmartTimeRollover`, `WithEOWSkipToday`). 35 test functions.
 - **Phase 3**: `WatchChanges` — COMPLETE (v0.3.0). Change notifications via self-pipe + EKEventStoreChangedNotification. 4 unit tests per package. See `docs/prd/change-notifications-prd.md`.
 - **Concurrency safety** (v0.4.0): Inline error returns (`ek_result_t`), serial write queue (`dispatch_sync`), non-blocking WatchChanges pipe reads. `RecurrenceRule.Validate()` catches invalid constraints. Batch delete: `DeleteEvents(ids, span)`, `DeleteReminders(ids)`. Better "not found" errors include available names.
+- **URL attachments** (v0.5.0): Reminder URLs write to the real Reminders.app URL field via ReminderKit private API introspection.
+- **Suppress default alarms** (v0.6.0): `CreateEventInput.SuppressDefaultAlarms` bool opts out of calendar-inherited default alarms at save time. Bridge clears `event.alarms` before adding user-supplied alerts.
 - **Deferred**: Future frameworks (Contacts, etc.) — out of scope for now
 - **Deferred**: Performance benchmarking — see `docs/prd/benchmarking-prd.md`
 - **Deferred**: 10 future capabilities — see `docs/prd/future-capabilities-prd.md`
