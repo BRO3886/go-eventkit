@@ -635,6 +635,65 @@ func TestMarshalCreateInput(t *testing.T) {
 		if _, ok := result["alerts"]; ok {
 			t.Error("alerts should be omitted when empty")
 		}
+		if _, ok := result["suppressDefaultAlarms"]; ok {
+			t.Error("suppressDefaultAlarms should be omitted when false")
+		}
+	})
+
+	t.Run("suppress default alarms flag", func(t *testing.T) {
+		input := CreateEventInput{
+			Title:                 "No alerts please",
+			StartDate:             time.Date(2026, 2, 12, 14, 0, 0, 0, time.UTC),
+			EndDate:               time.Date(2026, 2, 12, 15, 0, 0, 0, time.UTC),
+			SuppressDefaultAlarms: true,
+		}
+
+		data, err := marshalCreateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var result map[string]any
+		if err := json.Unmarshal(data, &result); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+
+		if result["suppressDefaultAlarms"] != true {
+			t.Errorf("suppressDefaultAlarms = %v, want true", result["suppressDefaultAlarms"])
+		}
+		if _, ok := result["alerts"]; ok {
+			t.Error("alerts should still be omitted when empty, even with suppression on")
+		}
+	})
+
+	t.Run("suppress default alarms with explicit alerts", func(t *testing.T) {
+		input := CreateEventInput{
+			Title:     "Only my alerts",
+			StartDate: time.Date(2026, 2, 12, 14, 0, 0, 0, time.UTC),
+			EndDate:   time.Date(2026, 2, 12, 15, 0, 0, 0, time.UTC),
+			Alerts: []Alert{
+				{RelativeOffset: -10 * time.Minute},
+			},
+			SuppressDefaultAlarms: true,
+		}
+
+		data, err := marshalCreateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var result map[string]any
+		if err := json.Unmarshal(data, &result); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+
+		if result["suppressDefaultAlarms"] != true {
+			t.Errorf("suppressDefaultAlarms = %v, want true", result["suppressDefaultAlarms"])
+		}
+		alerts, ok := result["alerts"].([]any)
+		if !ok || len(alerts) != 1 {
+			t.Fatalf("expected 1 alert, got %v", result["alerts"])
+		}
 	})
 
 	t.Run("timezone conversion", func(t *testing.T) {

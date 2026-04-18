@@ -372,6 +372,14 @@ type CreateEventInput struct {
 	Calendar string `json:"calendar"`
 	// Alerts configures notification alerts before the event.
 	Alerts []Alert `json:"alerts"`
+	// SuppressDefaultAlarms prevents the calendar's default alarms from
+	// being inherited by the new event. When false (the default) the
+	// event uses whatever alarms the target calendar applies (including
+	// any defaults configured in Calendar.app preferences). When true
+	// the event is saved with exactly the alarms listed in Alerts, and
+	// no others — pass an empty Alerts slice together with this flag
+	// to create an event with no alarms at all.
+	SuppressDefaultAlarms bool `json:"suppressDefaultAlarms,omitempty"`
 	// TimeZone is the IANA timezone for the event (e.g., "Asia/Tokyo").
 	// If empty, the system timezone is used.
 	TimeZone string `json:"timeZone"`

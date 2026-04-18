@@ -269,6 +269,87 @@ func main() {
 		log.Printf("  Created alert event: %q, Alerts=%d", alertEvent.Title, len(alertEvent.Alerts))
 	}
 
+	// --- Test 14b: SuppressDefaultAlarms control + experiment ---
+	// Create two events on the same calendar: one without the flag, one with.
+	// If Home has default alarms configured in Calendar.app Preferences, the
+	// control event should have > 0 alerts and the experiment should have 0.
+	// If Home has no defaults, both have 0 and the test is a soft-pass (still
+	// proves the flag didn't inject spurious alarms).
+	controlEvent, err := client.CreateEvent(calendar.CreateEventInput{
+		Title:     "[go-eventkit test] Control (default alarms allowed)",
+		StartDate: testStart.Add(7 * time.Hour),
+		EndDate:   testStart.Add(8 * time.Hour),
+		Calendar:  "Home",
+		Notes:     "Created by go-eventkit integration test. Control for SuppressDefaultAlarms. Safe to delete.",
+	})
+	check("Create control event (no suppression)", err)
+	var controlEventID string
+	if err == nil {
+		controlEventID = controlEvent.ID
+		log.Printf("  Control event: %q, Alerts=%d", controlEvent.Title, len(controlEvent.Alerts))
+	}
+
+	noAlarmEvent, err := client.CreateEvent(calendar.CreateEventInput{
+		Title:                 "[go-eventkit test] No Alarms (suppress defaults)",
+		StartDate:             testStart.Add(8 * time.Hour),
+		EndDate:               testStart.Add(9 * time.Hour),
+		Calendar:              "Home",
+		SuppressDefaultAlarms: true,
+		Notes:                 "Created by go-eventkit integration test. Should have zero alarms regardless of Home calendar defaults. Safe to delete.",
+	})
+	check("Create event with SuppressDefaultAlarms", err)
+
+	var noAlarmEventID string
+	if err == nil {
+		noAlarmEventID = noAlarmEvent.ID
+		if len(noAlarmEvent.Alerts) != 0 {
+			log.Printf("  FAIL: SuppressDefaultAlarms event has %d alerts, want 0: %+v",
+				len(noAlarmEvent.Alerts), noAlarmEvent.Alerts)
+			failed++
+		} else {
+			log.Printf("  Suppress-defaults event: %q, Alerts=0 (as expected)", noAlarmEvent.Title)
+			passed++
+		}
+		if len(controlEvent.Alerts) > 0 {
+			log.Printf("  PROOF: control had %d default alarms, suppressed version has 0 — flag works.", len(controlEvent.Alerts))
+		} else {
+			log.Println("  NOTE: Home calendar appears to have no default alarms — suppression test is a soft-pass (assertion still holds, but nothing to suppress).")
+		}
+	}
+
+	// --- Test 14c: SuppressDefaultAlarms with explicit alerts ---
+	// The flag should coexist with user-supplied alerts: the saved event
+	// should have exactly the alerts we listed, no calendar defaults mixed in.
+	mixedEvent, err := client.CreateEvent(calendar.CreateEventInput{
+		Title:     "[go-eventkit test] Explicit Alerts Only",
+		StartDate: testStart.Add(9 * time.Hour),
+		EndDate:   testStart.Add(10 * time.Hour),
+		Calendar:  "Home",
+		Alerts: []calendar.Alert{
+			{RelativeOffset: -30 * time.Minute},
+		},
+		SuppressDefaultAlarms: true,
+		Notes:                 "Created by go-eventkit integration test. Should have exactly one alert (30m before). Safe to delete.",
+	})
+	check("Create event with SuppressDefaultAlarms and explicit alert", err)
+
+	var mixedEventID string
+	if err == nil {
+		mixedEventID = mixedEvent.ID
+		if len(mixedEvent.Alerts) != 1 {
+			log.Printf("  FAIL: mixed event has %d alerts, want exactly 1: %+v",
+				len(mixedEvent.Alerts), mixedEvent.Alerts)
+			failed++
+		} else if mixedEvent.Alerts[0].RelativeOffset != -30*time.Minute {
+			log.Printf("  FAIL: mixed event alert offset = %v, want -30m",
+				mixedEvent.Alerts[0].RelativeOffset)
+			failed++
+		} else {
+			log.Printf("  Created mixed event: %q, Alerts=1 (-30m, as expected)", mixedEvent.Title)
+			passed++
+		}
+	}
+
 	// --- Test 15: Move event between calendars ---
 	if createdID != "" {
 		workCal := "Work"
@@ -596,7 +677,7 @@ func main() {
 
 	// --- Cleanup: Delete all test events ---
 	log.Println("\n--- Cleanup ---")
-	cleanupIDs := []string{createdID, workEventID, familyEventID, tzEventID, urlEventID, alertEventID, weeklyRecEventID, locEventID}
+	cleanupIDs := []string{createdID, workEventID, familyEventID, tzEventID, urlEventID, alertEventID, controlEventID, noAlarmEventID, mixedEventID, weeklyRecEventID, locEventID}
 	for _, id := range cleanupIDs {
 		if id == "" {
 			continue

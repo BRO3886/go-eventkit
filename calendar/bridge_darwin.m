@@ -590,6 +590,20 @@ ek_result_t ek_cal_create_event(const char* json_input) {
             }
 
             // Alerts.
+            //
+            // If suppressDefaultAlarms is set, explicitly clear any alarms
+            // EventKit attached from the calendar's defaults before adding
+            // the user-supplied ones. This guarantees the saved event ends
+            // up with exactly the listed alerts and no others.
+            BOOL suppressDefaults = NO;
+            if (input[@"suppressDefaultAlarms"] && input[@"suppressDefaultAlarms"] != [NSNull null]) {
+                suppressDefaults = [input[@"suppressDefaultAlarms"] boolValue];
+            }
+            if (suppressDefaults) {
+                for (EKAlarm* alarm in [event.alarms copy]) {
+                    [event removeAlarm:alarm];
+                }
+            }
             if (input[@"alerts"] && input[@"alerts"] != [NSNull null]) {
                 NSArray* alertInputs = input[@"alerts"];
                 for (NSDictionary* alertInput in alertInputs) {
