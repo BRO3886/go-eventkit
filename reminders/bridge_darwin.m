@@ -166,6 +166,26 @@ static id rem_reminder_from_ek(EKReminder* r) {
     return remObj;
 }
 
+// Read the flagged state from a REMReminder. Returns NO if the property is
+// not exposed on this macOS or any guard fails.
+//
+// REMReminder declares `flagged` as a dynamic property (Core Data style), so
+// the synthesized -isFlagged getter is not registered with the runtime —
+// respondsToSelector: returns NO even though the property is readable. Use
+// KVC, which goes through the dynamic dispatch.
+static BOOL read_flagged(id remReminder) {
+    if (!remReminder) return NO;
+    @try {
+        id v = [remReminder valueForKey:@"flagged"];
+        if ([v isKindOfClass:[NSNumber class]]) {
+            return [(NSNumber*)v boolValue];
+        }
+    } @catch (NSException* e) {
+        // Property not present on this macOS — fall through to NO.
+    }
+    return NO;
+}
+
 // Read the first URL attachment (as NSString) from a REMReminder, or nil if none.
 static NSString* read_url_attachment(id remReminder) {
     if (!remReminder) return nil;
@@ -245,6 +265,74 @@ static BOOL write_url_attachment(EKReminder* ekReminder, NSString* url) {
     return saved;
 }
 
+// Write the flagged state to an EKReminder via the private ReminderKit save
+// path. EventKit does not expose the flagged property, so this is the only
+// in-process way to flag/unflag.
+//
+// REMReminder.flagged is read-only; the writable path is setFlagged: on the
+// REMReminderChangeItem returned by [REMSaveRequest updateReminder:]. The
+// save then observes the change-item mutation and persists it.
+//
+// Returns YES on success.
+static BOOL write_flagged(EKReminder* ekReminder, BOOL flagged) {
+    if (!load_reminderkit()) return NO;
+    id remReminder = rem_reminder_from_ek(ekReminder);
+    if (!remReminder) return NO;
+
+    // Get REMStore — via ivar _store first, then -store method as fallback.
+    id remStore = nil;
+    Ivar storeIvar = find_ivar([remReminder class], "_store");
+    if (storeIvar) remStore = object_getIvar(remReminder, storeIvar);
+    if (!remStore) {
+        SEL storeSel = NSSelectorFromString(@"store");
+        if ([remReminder respondsToSelector:storeSel]) {
+            remStore = ((id(*)(id,SEL))objc_msgSend)(remReminder, storeSel);
+        }
+    }
+    Class remStoreClass = objc_getClass("REMStore");
+    if (!remStore || !remStoreClass || ![remStore isKindOfClass:remStoreClass]) return NO;
+
+    Class saveReqClass = objc_getClass("REMSaveRequest");
+    if (!saveReqClass) return NO;
+    id saveReq = [saveReqClass alloc];
+    SEL initSel = NSSelectorFromString(@"initWithStore:");
+    if (![saveReq respondsToSelector:initSel]) return NO;
+    saveReq = ((id(*)(id,SEL,id))objc_msgSend)(saveReq, initSel, remStore);
+    if (!saveReq) return NO;
+
+    SEL updateSel = NSSelectorFromString(@"updateReminder:");
+    if (![saveReq respondsToSelector:updateSel]) return NO;
+    id changeItem = ((id(*)(id,SEL,id))objc_msgSend)(saveReq, updateSel, remReminder);
+    if (!changeItem) return NO;
+
+    // The proper write path is through flaggedContext on the change item,
+    // which returns a REMReminderFlaggedContextChangeItem with setFlagged:.
+    // (Setting flagged directly on the change item exists but doesn't
+    // propagate through the save pipeline.)
+    SEL flaggedCtxSel = NSSelectorFromString(@"flaggedContext");
+    if (![changeItem respondsToSelector:flaggedCtxSel]) return NO;
+    id flaggedCtx = ((id(*)(id,SEL))objc_msgSend)(changeItem, flaggedCtxSel);
+    if (!flaggedCtx) return NO;
+    SEL setFlaggedSel = NSSelectorFromString(@"setFlagged:");
+    if (![flaggedCtx respondsToSelector:setFlaggedSel]) return NO;
+    ((void(*)(id,SEL,BOOL))objc_msgSend)(flaggedCtx, setFlaggedSel, flagged);
+
+    SEL saveSel = NSSelectorFromString(@"saveSynchronouslyWithError:");
+    if (![saveReq respondsToSelector:saveSel]) return NO;
+    NSError* err = nil;
+    BOOL saved = ((BOOL(*)(id,SEL,NSError**))objc_msgSend)(saveReq, saveSel, &err);
+    if (!saved) return NO;
+
+    // The REMSaveRequest writes through to ReminderKit but does not update
+    // EventKit's in-process cache. Force a refresh so subsequent reads via
+    // EKReminder._remObject see the new flagged state.
+    EKEventStore* store = get_store();
+    if ([store respondsToSelector:@selector(refreshSourcesIfNecessary)]) {
+        [store refreshSourcesIfNecessary];
+    }
+    return YES;
+}
+
 // --- Synchronous reminder fetch (dispatch_semaphore for async API) ---
 
 static NSArray<EKReminder*>* fetch_all_reminders(NSArray<EKCalendar*>* calendars) {
@@ -271,10 +359,14 @@ static NSDictionary* reminder_to_dict(EKReminder* r) {
     d[@"list"] = r.calendar.title ?: @"";
     d[@"listID"] = r.calendar.calendarIdentifier ?: @"";
     d[@"completed"] = r.isCompleted ? @YES : @NO;
-    // EventKit does NOT expose the flagged property on EKReminder.
-    // r.isFlagged does not exist. Always returns NO.
-    // This is a known Apple limitation (see rem journal Session 3).
-    d[@"flagged"] = @NO;
+    // EventKit does not expose the flagged property on EKReminder, but the
+    // underlying REMReminder (private ReminderKit) does. Read via the bridge,
+    // falling back to NO if the private API is unavailable on this macOS.
+    BOOL flagged = NO;
+    if (load_reminderkit()) {
+        flagged = read_flagged(rem_reminder_from_ek(r));
+    }
+    d[@"flagged"] = flagged ? @YES : @NO;
     d[@"priority"] = @(r.priority);
     d[@"hasAlarms"] = r.hasAlarms ? @YES : @NO;
 
@@ -784,6 +876,19 @@ ek_result_t ek_rem_create_reminder(const char* json_input) {
                 }
             }
 
+            // Flagged is set via the private ReminderKit API (EventKit doesn't
+            // expose it). Only write if explicitly true — false is the default.
+            if (input[@"flagged"] && [input[@"flagged"] boolValue]) {
+                EKReminder* fresh = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
+                if (fresh && write_flagged(fresh, YES)) {
+                    // The save mutates the underlying store, but EKReminder
+                    // (and its _remObject snapshot) is captured pre-save —
+                    // refetch so the returned dict reflects the new value.
+                    EKReminder* postSave = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
+                    if (postSave) reminder = postSave;
+                }
+            }
+
             res.result = to_json(reminder_to_dict(reminder));
             if (!res.result) res.error = strdup("JSON serialization failed");
         }
@@ -988,6 +1093,17 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
                         write_url_attachment(fresh, input[@"url"]);
                     }
                     reminder = fresh;
+                }
+            }
+
+            // Flagged via private ReminderKit API (EventKit doesn't expose it).
+            // Key presence signals intent: present = set to bool value, absent = unchanged.
+            if (input[@"flagged"] != nil && input[@"flagged"] != [NSNull null]) {
+                EKReminder* fresh = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
+                if (fresh && write_flagged(fresh, [input[@"flagged"] boolValue])) {
+                    // Refetch post-save so returned dict reflects the new value.
+                    EKReminder* postSave = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
+                    reminder = postSave ?: fresh;
                 }
             }
 

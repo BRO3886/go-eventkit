@@ -479,6 +479,35 @@ func TestMarshalCreateInput(t *testing.T) {
 			t.Error("url should not be present when empty")
 		}
 	})
+
+	// Flagged on create rides the same key-presence convention as URL: the
+	// bridge only invokes write_flagged when the key is present and truthy.
+	// Unflagged is the default, so an unset Flagged should omit the key.
+	t.Run("flagged false omitted from create", func(t *testing.T) {
+		input := CreateReminderInput{Title: "Not flagged"}
+		jsonStr, err := marshalCreateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+		if _, ok := m["flagged"]; ok {
+			t.Error("flagged should not be present when false")
+		}
+	})
+
+	t.Run("flagged true serializes on create", func(t *testing.T) {
+		input := CreateReminderInput{Title: "Flagged", Flagged: true}
+		jsonStr, err := marshalCreateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+		if m["flagged"] != true {
+			t.Errorf("flagged = %v, want true", m["flagged"])
+		}
+	})
 }
 
 // --- Marshal Update Input Tests ---
@@ -600,6 +629,41 @@ func TestMarshalUpdateInput(t *testing.T) {
 		json.Unmarshal([]byte(jsonStr), &m)
 		if _, ok := m["url"]; ok {
 			t.Error("url key should not be present when UpdateReminderInput.URL is nil")
+		}
+	})
+
+	// Unflag must serialize as `flagged: false`. The bridge keys off presence
+	// of the flagged key, not its truthiness, so omitting it would silently
+	// turn an unflag into a no-op.
+	t.Run("unflag serializes flagged false", func(t *testing.T) {
+		flagged := false
+		input := UpdateReminderInput{Flagged: &flagged}
+		jsonStr, err := marshalUpdateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+		if _, ok := m["flagged"]; !ok {
+			t.Fatal("flagged key must be present (false = unflag signal)")
+		}
+		if m["flagged"] != false {
+			t.Errorf("flagged = %v, want false", m["flagged"])
+		}
+	})
+
+	// nil Flagged means "don't touch it" — must not emit the key.
+	t.Run("omit flagged when nil", func(t *testing.T) {
+		title := "unrelated"
+		input := UpdateReminderInput{Title: &title}
+		jsonStr, err := marshalUpdateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+		if _, ok := m["flagged"]; ok {
+			t.Error("flagged key should not be present when UpdateReminderInput.Flagged is nil")
 		}
 	})
 
