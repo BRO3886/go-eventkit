@@ -22,12 +22,6 @@
 // [ErrAccessDenied]. Permissions can be managed in System Settings >
 // Privacy & Security > Reminders.
 //
-// # Known Limitations
-//
-// The [Reminder.Flagged] field is always false — Apple's EventKit framework
-// does not expose the "flagged" property despite it being visible in the
-// Reminders app.
-//
 // # Usage
 //
 //	client, err := reminders.New()
@@ -121,8 +115,8 @@ type Reminder struct {
 	Priority Priority `json:"priority"`
 	// Completed is true if the reminder has been marked as done.
 	Completed bool `json:"completed"`
-	// Flagged indicates whether the reminder is flagged. Note: this is always
-	// false because Apple's EventKit does not expose the flagged property.
+	// Flagged indicates whether the reminder is flagged. Read via the private
+	// ReminderKit framework since EventKit does not expose this property.
 	Flagged bool `json:"flagged"`
 	// URL is an optional URL associated with the reminder.
 	URL string `json:"url,omitempty"`
@@ -313,6 +307,9 @@ type CreateReminderInput struct {
 	Priority Priority
 	// URL associates a URL with the reminder.
 	URL string
+	// Flagged sets the flagged state on creation. Written via the private
+	// ReminderKit framework since EventKit does not expose this property.
+	Flagged bool
 	// Alarms adds notification alarms to the reminder.
 	Alarms []Alarm
 	// RecurrenceRules sets the recurrence pattern(s) for the reminder.
@@ -344,8 +341,8 @@ type UpdateReminderInput struct {
 	// Completed marks the reminder as completed (true) or incomplete (false).
 	// For a dedicated API, see [Client.CompleteReminder] and [Client.UncompleteReminder].
 	Completed *bool
-	// Flagged updates the flagged state. Note: EventKit does not expose the
-	// flagged property, so this field has no effect.
+	// Flagged updates the flagged state. Written via the private ReminderKit
+	// framework since EventKit does not expose this property.
 	Flagged *bool
 	// URL updates the associated URL.
 	URL *string
