@@ -321,15 +321,22 @@ func (s Span) String() string {
 type ListOption func(*listOptions)
 
 type listOptions struct {
-	calendarName string
-	calendarID   string
-	searchQuery  string
+	calendarNames []string
+	calendarID    string
+	searchQuery   string
 }
 
 // WithCalendar filters events by calendar name.
 func WithCalendar(name string) ListOption {
 	return func(o *listOptions) {
-		o.calendarName = name
+		o.calendarNames = []string{name}
+	}
+}
+
+// WithCalendars filters events by multiple calendar names.
+func WithCalendars(names []string) ListOption {
+	return func(o *listOptions) {
+		o.calendarNames = names
 	}
 }
 

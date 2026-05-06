@@ -892,15 +892,22 @@ func TestMarshalUpdateInput(t *testing.T) {
 func TestApplyOptions(t *testing.T) {
 	t.Run("no options", func(t *testing.T) {
 		o := applyOptions(nil)
-		if o.calendarName != "" || o.calendarID != "" || o.searchQuery != "" {
+		if len(o.calendarNames) != 0 || o.calendarID != "" || o.searchQuery != "" {
 			t.Error("expected all options to be empty")
 		}
 	})
 
 	t.Run("WithCalendar", func(t *testing.T) {
 		o := applyOptions([]ListOption{WithCalendar("Work")})
-		if o.calendarName != "Work" {
-			t.Errorf("calendarName = %q, want %q", o.calendarName, "Work")
+		if len(o.calendarNames) != 1 || o.calendarNames[0] != "Work" {
+			t.Errorf("calendarNames = %v, want [Work]", o.calendarNames)
+		}
+	})
+
+	t.Run("WithCalendars", func(t *testing.T) {
+		o := applyOptions([]ListOption{WithCalendars([]string{"Work", "Personal"})})
+		if len(o.calendarNames) != 2 || o.calendarNames[0] != "Work" || o.calendarNames[1] != "Personal" {
+			t.Errorf("calendarNames = %v, want [Work Personal]", o.calendarNames)
 		}
 	})
 
@@ -923,8 +930,8 @@ func TestApplyOptions(t *testing.T) {
 			WithCalendar("Work"),
 			WithSearch("meeting"),
 		})
-		if o.calendarName != "Work" {
-			t.Errorf("calendarName = %q, want %q", o.calendarName, "Work")
+		if len(o.calendarNames) != 1 || o.calendarNames[0] != "Work" {
+			t.Errorf("calendarNames = %v, want [Work]", o.calendarNames)
 		}
 		if o.searchQuery != "meeting" {
 			t.Errorf("searchQuery = %q, want %q", o.searchQuery, "meeting")
@@ -936,8 +943,18 @@ func TestApplyOptions(t *testing.T) {
 			WithCalendar("Work"),
 			WithCalendar("Home"),
 		})
-		if o.calendarName != "Home" {
-			t.Errorf("calendarName = %q, want %q (last option should win)", o.calendarName, "Home")
+		if len(o.calendarNames) != 1 || o.calendarNames[0] != "Home" {
+			t.Errorf("calendarNames = %v, want [Home] (last option should win)", o.calendarNames)
+		}
+	})
+
+	t.Run("WithCalendars overrides WithCalendar", func(t *testing.T) {
+		o := applyOptions([]ListOption{
+			WithCalendar("Work"),
+			WithCalendars([]string{"Home", "Personal"}),
+		})
+		if len(o.calendarNames) != 2 || o.calendarNames[0] != "Home" {
+			t.Errorf("calendarNames = %v, want [Home Personal]", o.calendarNames)
 		}
 	})
 }

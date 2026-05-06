@@ -79,8 +79,8 @@ func (c *Client) Events(start, end time.Time, opts ...ListOption) ([]Event, erro
 	if o.calendarID != "" {
 		cCalID = C.CString(o.calendarID)
 		defer C.free(unsafe.Pointer(cCalID))
-	} else if o.calendarName != "" {
-		cCalID = C.CString(o.calendarName)
+	} else if len(o.calendarNames) > 0 {
+		cCalID = C.CString(strings.Join(o.calendarNames, "\n"))
 		defer C.free(unsafe.Pointer(cCalID))
 	}
 

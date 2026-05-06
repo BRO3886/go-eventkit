@@ -427,20 +427,29 @@ ek_result_t ek_cal_fetch_events(const char* start_date, const char* end_date,
             return res;
         }
 
-        // Build calendar filter.
+        // Build calendar filter. calendar_id may contain newline-separated
+        // names/IDs for multi-calendar queries.
         NSArray<EKCalendar*>* calendars = nil;
         if (calendar_id) {
-            NSString* calId = [NSString stringWithUTF8String:calendar_id];
-            // Try as calendar ID first, then as calendar name.
-            EKCalendar* cal = find_calendar_by_id(store, calId);
-            if (!cal) {
-                cal = find_calendar_by_name(store, calId);
+            NSString* raw = [NSString stringWithUTF8String:calendar_id];
+            NSArray<NSString*>* parts = [raw componentsSeparatedByString:@"\n"];
+            NSMutableArray<EKCalendar*>* matched = [NSMutableArray array];
+            for (NSString* part in parts) {
+                NSString* trimmed = [part stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                if (trimmed.length == 0) continue;
+                EKCalendar* cal = find_calendar_by_id(store, trimmed);
+                if (!cal) {
+                    cal = find_calendar_by_name(store, trimmed);
+                }
+                if (cal) {
+                    [matched addObject:cal];
+                } else {
+                    res.error = strdup([[NSString stringWithFormat:@"calendar not found: %@ (available: %@)", trimmed, available_calendar_names(store)] UTF8String]);
+                    return res;
+                }
             }
-            if (cal) {
-                calendars = @[cal];
-            } else {
-                res.error = strdup([[NSString stringWithFormat:@"calendar not found: %s (available: %@)", calendar_id, available_calendar_names(store)] UTF8String]);
-                return res;
+            if (matched.count > 0) {
+                calendars = matched;
             }
         }
 
