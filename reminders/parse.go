@@ -271,6 +271,9 @@ func marshalCreateInput(input CreateReminderInput) (string, error) {
 	if input.URL != "" {
 		m["url"] = input.URL
 	}
+	if input.Flagged {
+		m["flagged"] = true
+	}
 	if input.Priority != PriorityNone {
 		m["priority"] = int(input.Priority)
 	}

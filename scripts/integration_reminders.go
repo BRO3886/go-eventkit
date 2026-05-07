@@ -310,6 +310,82 @@ func main() {
 		}
 	}
 
+	// --- Test 15b: Flagged round-trip via private ReminderKit API ---
+	// Verifies the flagged property reads/writes through REMReminder since
+	// EventKit does not expose it. Visual check: open Reminders.app and
+	// confirm the flag pin appears/disappears as the test runs.
+	flagReminder, err := client.CreateReminder(reminders.CreateReminderInput{
+		Title:    "[go-eventkit test] Flagged Reminder",
+		ListName: defaultList,
+		Notes:    "Created by go-eventkit integration test. Safe to delete.",
+		Flagged:  true,
+	})
+	check("Create reminder with Flagged: true", err)
+
+	var flagReminderID string
+	if err == nil {
+		flagReminderID = flagReminder.ID
+		log.Printf("  Created flagged reminder: %q, Flagged=%v", flagReminder.Title, flagReminder.Flagged)
+		if !flagReminder.Flagged {
+			log.Printf("FAIL: Flagged=false on returned object after Create with Flagged: true")
+			failed++
+		} else {
+			passed++
+			// Refetch from store to confirm the flag survived persistence.
+			refetched, rerr := client.Reminder(flagReminderID)
+			if rerr != nil {
+				log.Printf("FAIL: could not refetch flagged reminder: %v", rerr)
+				failed++
+			} else if !refetched.Flagged {
+				log.Printf("FAIL: Flagged did not persist on fresh fetch: got false")
+				failed++
+			} else {
+				log.Printf("PASS: Flagged=true persisted on fresh fetch")
+				passed++
+			}
+		}
+
+		// Unflag via UpdateReminder and verify read-back returns false.
+		falseVal := false
+		_, uerr := client.UpdateReminder(flagReminderID, reminders.UpdateReminderInput{Flagged: &falseVal})
+		if uerr != nil {
+			log.Printf("FAIL: UpdateReminder unflag: %v", uerr)
+			failed++
+		} else {
+			unflagged, ferr := client.Reminder(flagReminderID)
+			if ferr != nil {
+				log.Printf("FAIL: could not refetch after unflag: %v", ferr)
+				failed++
+			} else if unflagged.Flagged {
+				log.Printf("FAIL: Unflag did not take: Flagged=%v", unflagged.Flagged)
+				failed++
+			} else {
+				log.Printf("PASS: Unflag persisted on fresh fetch")
+				passed++
+			}
+		}
+
+		// Re-flag via UpdateReminder and verify read-back returns true.
+		trueVal := true
+		_, rerr := client.UpdateReminder(flagReminderID, reminders.UpdateReminderInput{Flagged: &trueVal})
+		if rerr != nil {
+			log.Printf("FAIL: UpdateReminder re-flag: %v", rerr)
+			failed++
+		} else {
+			reflagged, ferr := client.Reminder(flagReminderID)
+			if ferr != nil {
+				log.Printf("FAIL: could not refetch after re-flag: %v", ferr)
+				failed++
+			} else if !reflagged.Flagged {
+				log.Printf("FAIL: Re-flag did not take: Flagged=%v", reflagged.Flagged)
+				failed++
+			} else {
+				log.Printf("PASS: Re-flag persisted on fresh fetch")
+				passed++
+			}
+		}
+	}
+
 	// --- Test 16: Create reminder with relative offset alarm ---
 	relAlarmReminder, err := client.CreateReminder(reminders.CreateReminderInput{
 		Title:    "[go-eventkit test] Relative Alarm",
@@ -548,7 +624,7 @@ func main() {
 
 	// --- Cleanup: Delete all test reminders ---
 	log.Println("\n--- Cleanup ---")
-	cleanupIDs := []string{createdID, alarmReminderID, urlReminderID, relAlarmID, recDailyID, recWeeklyID}
+	cleanupIDs := []string{createdID, alarmReminderID, urlReminderID, flagReminderID, relAlarmID, recDailyID, recWeeklyID}
 	for _, id := range cleanupIDs {
 		if id == "" {
 			continue
