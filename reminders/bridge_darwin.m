@@ -878,7 +878,7 @@ ek_result_t ek_rem_create_reminder(const char* json_input) {
 
             // Flagged is set via the private ReminderKit API (EventKit doesn't
             // expose it). Only write if explicitly true — false is the default.
-            if (input[@"flagged"] && [input[@"flagged"] boolValue]) {
+            if (input[@"flagged"] && input[@"flagged"] != [NSNull null] && [input[@"flagged"] boolValue]) {
                 EKReminder* fresh = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
                 if (fresh && write_flagged(fresh, YES)) {
                     // The save mutates the underlying store, but EKReminder

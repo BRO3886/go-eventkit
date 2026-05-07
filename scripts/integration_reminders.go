@@ -352,13 +352,16 @@ func main() {
 			log.Printf("FAIL: UpdateReminder unflag: %v", uerr)
 			failed++
 		} else {
-			unflagged, _ := client.Reminder(flagReminderID)
-			if unflagged != nil && !unflagged.Flagged {
-				log.Printf("PASS: Unflag persisted on fresh fetch")
-				passed++
-			} else {
+			unflagged, ferr := client.Reminder(flagReminderID)
+			if ferr != nil {
+				log.Printf("FAIL: could not refetch after unflag: %v", ferr)
+				failed++
+			} else if unflagged.Flagged {
 				log.Printf("FAIL: Unflag did not take: Flagged=%v", unflagged.Flagged)
 				failed++
+			} else {
+				log.Printf("PASS: Unflag persisted on fresh fetch")
+				passed++
 			}
 		}
 
@@ -369,13 +372,16 @@ func main() {
 			log.Printf("FAIL: UpdateReminder re-flag: %v", rerr)
 			failed++
 		} else {
-			reflagged, _ := client.Reminder(flagReminderID)
-			if reflagged != nil && reflagged.Flagged {
-				log.Printf("PASS: Re-flag persisted on fresh fetch")
-				passed++
-			} else {
+			reflagged, ferr := client.Reminder(flagReminderID)
+			if ferr != nil {
+				log.Printf("FAIL: could not refetch after re-flag: %v", ferr)
+				failed++
+			} else if !reflagged.Flagged {
 				log.Printf("FAIL: Re-flag did not take: Flagged=%v", reflagged.Flagged)
 				failed++
+			} else {
+				log.Printf("PASS: Re-flag persisted on fresh fetch")
+				passed++
 			}
 		}
 	}
