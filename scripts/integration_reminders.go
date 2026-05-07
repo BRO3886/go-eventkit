@@ -322,8 +322,9 @@ func main() {
 	})
 	check("Create reminder with Flagged: true", err)
 
+	var flagReminderID string
 	if err == nil {
-		flagReminderID := flagReminder.ID
+		flagReminderID = flagReminder.ID
 		log.Printf("  Created flagged reminder: %q, Flagged=%v", flagReminder.Title, flagReminder.Flagged)
 		if !flagReminder.Flagged {
 			log.Printf("FAIL: Flagged=false on returned object after Create with Flagged: true")
@@ -617,7 +618,7 @@ func main() {
 
 	// --- Cleanup: Delete all test reminders ---
 	log.Println("\n--- Cleanup ---")
-	cleanupIDs := []string{createdID, alarmReminderID, urlReminderID, relAlarmID, recDailyID, recWeeklyID}
+	cleanupIDs := []string{createdID, alarmReminderID, urlReminderID, flagReminderID, relAlarmID, recDailyID, recWeeklyID}
 	for _, id := range cleanupIDs {
 		if id == "" {
 			continue

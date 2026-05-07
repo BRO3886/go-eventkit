@@ -238,6 +238,27 @@ func TestParseReminderJSON(t *testing.T) {
 		}
 	})
 
+	t.Run("flagged true", func(t *testing.T) {
+		jsonStr := `{
+			"id": "flag-1",
+			"title": "Flagged task",
+			"list": "Work",
+			"listID": "cal-f",
+			"priority": 0,
+			"completed": false,
+			"flagged": true,
+			"hasAlarms": false,
+			"alarms": []
+		}`
+		r, err := parseReminderJSON(jsonStr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !r.Flagged {
+			t.Error("Flagged should be true")
+		}
+	})
+
 	t.Run("null fields", func(t *testing.T) {
 		jsonStr := `{
 			"id": "abc",
@@ -753,6 +774,19 @@ func TestConvertRawReminder(t *testing.T) {
 		}
 		if len(r.Alarms) != 1 {
 			t.Errorf("Alarms len = %d", len(r.Alarms))
+		}
+	})
+
+	t.Run("flagged propagates", func(t *testing.T) {
+		raw := rawReminder{
+			ID:      "flag-1",
+			Title:   "Flagged",
+			List:    "Work",
+			Flagged: true,
+		}
+		r := convertRawReminder(&raw)
+		if !r.Flagged {
+			t.Error("Flagged should be true")
 		}
 	})
 
