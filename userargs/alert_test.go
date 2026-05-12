@@ -83,3 +83,10 @@ func TestParseAlertOffsets_Whitespace(t *testing.T) {
 		t.Errorf("expected 15m, got %v", got)
 	}
 }
+
+func TestParseAlertOffsets_OverflowRejected(t *testing.T) {
+	_, err := ParseAlertOffsets([]string{"153722867280912932m"})
+	if err == nil {
+		t.Fatal("expected overflow rejection, got nil error")
+	}
+}
