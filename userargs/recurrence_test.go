@@ -190,13 +190,54 @@ func TestParseRecurrence_ZeroIntervalCoercedToOne(t *testing.T) {
 	}
 }
 
-func TestParseRecurrence_NegativeIntervalCoercedToOne(t *testing.T) {
-	rules, err := ParseRecurrence(&RecurrenceArgs{Frequency: "daily", Interval: -5})
+func TestParseRecurrence_NegativeIntervalErrors(t *testing.T) {
+	_, err := ParseRecurrence(&RecurrenceArgs{Frequency: "daily", Interval: -7})
+	if err == nil {
+		t.Error("expected error for negative Interval")
+	}
+}
+
+func TestParseRecurrence_NegativeCountErrors(t *testing.T) {
+	_, err := ParseRecurrence(&RecurrenceArgs{Frequency: "daily", Count: -3})
+	if err == nil {
+		t.Error("expected error for negative Count")
+	}
+}
+
+func TestParseRecurrence_ZeroIntervalDefaultsToOne(t *testing.T) {
+	rules, err := ParseRecurrence(&RecurrenceArgs{Frequency: "daily", Interval: 0})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("%v", err)
 	}
 	if rules[0].Interval != 1 {
-		t.Errorf("expected Interval coerced to 1, got %d", rules[0].Interval)
+		t.Errorf("Interval = %d, want 1", rules[0].Interval)
+	}
+}
+
+func TestParseRecurrence_ByDayWithMonthly(t *testing.T) {
+	rules, err := ParseRecurrence(&RecurrenceArgs{Frequency: "monthly", ByDay: []string{"MO", "FR"}})
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	if len(rules[0].DaysOfTheWeek) != 2 {
+		t.Errorf("expected 2 DaysOfTheWeek, got %d", len(rules[0].DaysOfTheWeek))
+	}
+}
+
+func TestParseRecurrence_ByDayWithDailyErrors(t *testing.T) {
+	_, err := ParseRecurrence(&RecurrenceArgs{Frequency: "daily", ByDay: []string{"MO"}})
+	if err == nil {
+		t.Error("expected error: ByDay invalid for daily")
+	}
+}
+
+func TestParseRecurrence_FrequencyWhitespaceTrimmed(t *testing.T) {
+	rules, err := ParseRecurrence(&RecurrenceArgs{Frequency: "  Daily  "})
+	if err != nil {
+		t.Fatalf("expected whitespace to be trimmed, got %v", err)
+	}
+	if len(rules) != 1 {
+		t.Errorf("expected 1 rule, got %d", len(rules))
 	}
 }
 

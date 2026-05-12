@@ -23,16 +23,16 @@ type RecurrenceArgs struct {
 	Frequency string
 	// Interval is the number of frequency units between occurrences
 	// (e.g., Frequency="weekly", Interval=2 → every other week).
-	// Values < 1 are coerced to 1.
+	// Values < 0 return an error. Value 0 is treated as the default of 1.
 	Interval int
 	// Count stops the recurrence after N occurrences. Mutually exclusive
-	// with Until.
+	// with Until. Negative values return an error.
 	Count int
 	// Until is a date string (natural language or ISO 8601) parsed via
 	// dateparser.ParseDate. Mutually exclusive with Count.
 	Until string
 	// ByDay is a slice of weekday codes ("MO", "Mon", "Monday", any case).
-	// Used with weekly recurrence; ignored for daily.
+	// Accepted for weekly, monthly, and yearly frequencies. Rejected for daily.
 	ByDay []string
 }
 
@@ -53,28 +53,52 @@ func ParseRecurrence(args *RecurrenceArgs) ([]eventkit.RecurrenceRule, error) {
 	if args == nil || args.Frequency == "" {
 		return nil, nil
 	}
-	interval := args.Interval
-	if interval < 1 {
-		interval = 1
-	}
 	if args.Count > 0 && args.Until != "" {
 		return nil, errors.New("Count and Until are mutually exclusive")
 	}
+	if args.Count < 0 {
+		return nil, fmt.Errorf("Count must be >= 0 (got %d)", args.Count)
+	}
+	if args.Interval < 0 {
+		return nil, fmt.Errorf("Interval must be >= 0 (got %d)", args.Interval)
+	}
+	interval := args.Interval
+	if interval == 0 {
+		interval = 1
+	}
 
 	var rule eventkit.RecurrenceRule
-	switch strings.ToLower(args.Frequency) {
+	freq := strings.ToLower(strings.TrimSpace(args.Frequency))
+
+	days, err := ParseWeekdays(args.ByDay)
+	if err != nil {
+		return nil, err
+	}
+
+	switch freq {
 	case "daily":
+		if len(days) > 0 {
+			return nil, errors.New("ByDay is not valid for daily frequency")
+		}
 		rule = eventkit.Daily(interval)
 	case "weekly":
-		days, err := ParseWeekdays(args.ByDay)
-		if err != nil {
-			return nil, err
-		}
 		rule = eventkit.Weekly(interval, days...)
 	case "monthly":
 		rule = eventkit.Monthly(interval)
+		if len(days) > 0 {
+			rule.DaysOfTheWeek = make([]eventkit.RecurrenceDayOfWeek, 0, len(days))
+			for _, d := range days {
+				rule.DaysOfTheWeek = append(rule.DaysOfTheWeek, eventkit.RecurrenceDayOfWeek{DayOfTheWeek: d})
+			}
+		}
 	case "yearly":
 		rule = eventkit.Yearly(interval)
+		if len(days) > 0 {
+			rule.DaysOfTheWeek = make([]eventkit.RecurrenceDayOfWeek, 0, len(days))
+			for _, d := range days {
+				rule.DaysOfTheWeek = append(rule.DaysOfTheWeek, eventkit.RecurrenceDayOfWeek{DayOfTheWeek: d})
+			}
+		}
 	default:
 		return nil, fmt.Errorf("Frequency must be daily, weekly, monthly, or yearly (got %q)", args.Frequency)
 	}
