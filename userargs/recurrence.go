@@ -119,10 +119,10 @@ func ParseRecurrence(args *RecurrenceArgs) ([]eventkit.RecurrenceRule, error) {
 	return []eventkit.RecurrenceRule{rule}, nil
 }
 
-// WeekdayLookup maps 2-letter, 3-letter, and full weekday names (lowercase,
-// trimmed) to eventkit.Weekday values. Exposed for callers that need to
-// validate a single name without going through ParseWeekdays.
-var WeekdayLookup = map[string]eventkit.Weekday{
+// weekdayLookup maps 2-letter, 3-letter, and full weekday names (lowercase,
+// trimmed) to eventkit.Weekday values. Unexported to prevent external mutation
+// of the shared map, which would be a data-race vector.
+var weekdayLookup = map[string]eventkit.Weekday{
 	"su": eventkit.Sunday, "sun": eventkit.Sunday, "sunday": eventkit.Sunday,
 	"mo": eventkit.Monday, "mon": eventkit.Monday, "monday": eventkit.Monday,
 	"tu": eventkit.Tuesday, "tue": eventkit.Tuesday, "tuesday": eventkit.Tuesday,
@@ -137,7 +137,7 @@ var WeekdayLookup = map[string]eventkit.Weekday{
 // "MO", "Mon", "Monday" (and similarly for the other six days).
 func ParseWeekday(s string) (eventkit.Weekday, error) {
 	key := strings.ToLower(strings.TrimSpace(s))
-	if w, ok := WeekdayLookup[key]; ok {
+	if w, ok := weekdayLookup[key]; ok {
 		return w, nil
 	}
 	return eventkit.Sunday, fmt.Errorf("unknown weekday: %q", s)
