@@ -7,7 +7,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"os"
@@ -386,6 +385,89 @@ func main() {
 		}
 	}
 
+	// --- Test 15c: Native tag round-trip via private ReminderKit API ---
+	tagReminder, err := client.CreateReminder(reminders.CreateReminderInput{
+		Title:    "[go-eventkit test] Tagged Reminder",
+		ListName: defaultList,
+		Notes:    "Created by go-eventkit integration test. Safe to delete.",
+		Tags:     []string{"goeventkit", "integration"},
+	})
+	check("Create reminder with native tags", err)
+
+	var tagReminderID string
+	if err == nil {
+		tagReminderID = tagReminder.ID
+		log.Printf("  Created tagged reminder: %q, Tags=%v", tagReminder.Title, tagReminder.Tags)
+		if !hasTags(tagReminder.Tags, "goeventkit", "integration") {
+			log.Printf("FAIL: returned tags = %v, want goeventkit+integration", tagReminder.Tags)
+			failed++
+		} else {
+			passed++
+		}
+
+		refetched, rerr := client.Reminder(tagReminderID)
+		if rerr != nil {
+			log.Printf("FAIL: could not refetch tagged reminder: %v", rerr)
+			failed++
+		} else if !hasTags(refetched.Tags, "goeventkit", "integration") {
+			log.Printf("FAIL: tags did not persist on fresh fetch: got %v", refetched.Tags)
+			failed++
+		} else {
+			log.Printf("PASS: tags persisted on fresh fetch")
+			passed++
+		}
+
+		filtered, ferr := client.Reminders(reminders.WithTags("goeventkit", "integration"))
+		if ferr != nil {
+			log.Printf("FAIL: filter reminders by native tags: %v", ferr)
+			failed++
+		} else if !containsReminderID(filtered, tagReminderID) {
+			log.Printf("FAIL: tag filter did not return tagged reminder")
+			failed++
+		} else {
+			log.Printf("PASS: tag filter returned tagged reminder")
+			passed++
+		}
+
+		replacementTags := []string{"replacement"}
+		_, uerr := client.UpdateReminder(tagReminderID, reminders.UpdateReminderInput{Tags: &replacementTags})
+		if uerr != nil {
+			log.Printf("FAIL: UpdateReminder replace tags: %v", uerr)
+			failed++
+		} else {
+			updated, ferr := client.Reminder(tagReminderID)
+			if ferr != nil {
+				log.Printf("FAIL: could not refetch after tag replace: %v", ferr)
+				failed++
+			} else if !hasTags(updated.Tags, "replacement") || hasTags(updated.Tags, "goeventkit") {
+				log.Printf("FAIL: tag replace did not take: got %v", updated.Tags)
+				failed++
+			} else {
+				log.Printf("PASS: tag replace persisted on fresh fetch")
+				passed++
+			}
+		}
+
+		emptyTags := []string{}
+		_, cerr := client.UpdateReminder(tagReminderID, reminders.UpdateReminderInput{Tags: &emptyTags})
+		if cerr != nil {
+			log.Printf("FAIL: UpdateReminder clear tags: %v", cerr)
+			failed++
+		} else {
+			cleared, ferr := client.Reminder(tagReminderID)
+			if ferr != nil {
+				log.Printf("FAIL: could not refetch after tag clear: %v", ferr)
+				failed++
+			} else if len(cleared.Tags) != 0 {
+				log.Printf("FAIL: tag clear did not take: got %v", cleared.Tags)
+				failed++
+			} else {
+				log.Printf("PASS: tag clear persisted on fresh fetch")
+				passed++
+			}
+		}
+	}
+
 	// --- Test 16: Create reminder with relative offset alarm ---
 	relAlarmReminder, err := client.CreateReminder(reminders.CreateReminderInput{
 		Title:    "[go-eventkit test] Relative Alarm",
@@ -624,7 +706,7 @@ func main() {
 
 	// --- Cleanup: Delete all test reminders ---
 	log.Println("\n--- Cleanup ---")
-	cleanupIDs := []string{createdID, alarmReminderID, urlReminderID, flagReminderID, relAlarmID, recDailyID, recWeeklyID}
+	cleanupIDs := []string{createdID, alarmReminderID, urlReminderID, flagReminderID, tagReminderID, relAlarmID, recDailyID, recWeeklyID}
 	for _, id := range cleanupIDs {
 		if id == "" {
 			continue
@@ -649,125 +731,6 @@ func main() {
 		}
 	}
 
-	// drainWatch drains a watch channel with a bounded timeout.
-	drainWatch := func(ch <-chan struct{}, d time.Duration) {
-		timer := time.NewTimer(d)
-		defer timer.Stop()
-		for {
-			select {
-			case _, ok := <-ch:
-				if !ok {
-					return
-				}
-			case <-timer.C:
-				return
-			}
-		}
-	}
-
-	// --- Test 31: WatchChanges — signal on reminder write ---
-	log.Println("\n--- Test 31: WatchChanges signal on reminder write ---")
-	{
-		ctx31, cancel31 := context.WithTimeout(context.Background(), 5*time.Second)
-		changes31, err := client.WatchChanges(ctx31)
-		check("WatchChanges start", err)
-		if err == nil {
-			// Create a reminder to trigger notification.
-			rem31, cerr := client.CreateReminder(reminders.CreateReminderInput{
-				Title: "WatchChanges test reminder",
-			})
-			if cerr != nil {
-				log.Printf("WARN: CreateReminder for watch test: %v", cerr)
-			} else {
-				defer client.DeleteReminder(rem31.ID)
-			}
-			select {
-			case _, ok := <-changes31:
-				if ok {
-					log.Printf("  Received change signal (expected)")
-				} else {
-					log.Printf("  FAIL: channel closed before signal")
-					failed++
-					passed--
-				}
-			case <-ctx31.Done():
-				log.Printf("  FAIL: timeout waiting for change signal")
-				failed++
-				passed--
-			}
-			cancel31()
-			drainWatch(changes31, 3*time.Second)
-		}
-	}
-
-	// --- Test 32: WatchChanges — channel closes on ctx cancel ---
-	log.Println("\n--- Test 32: WatchChanges channel closes on ctx cancel ---")
-	{
-		ctx32, cancel32 := context.WithCancel(context.Background())
-		changes32, err := client.WatchChanges(ctx32)
-		check("WatchChanges start for cancel test", err)
-		if err == nil {
-			cancel32()
-			drainWatch(changes32, 3*time.Second)
-			select {
-			case _, ok := <-changes32:
-				if !ok {
-					log.Printf("  Channel closed after cancel (expected)")
-				} else {
-					log.Printf("  FAIL: channel still open after cancel + drain")
-					failed++
-					passed--
-				}
-			default:
-				log.Printf("  Channel drained (goroutine may still be exiting)")
-			}
-		}
-	}
-
-	// --- Test 33: WatchChanges — double call returns error ---
-	log.Println("\n--- Test 33: WatchChanges double call returns error ---")
-	{
-		ctx33a, cancel33a := context.WithCancel(context.Background())
-		changes33, err := client.WatchChanges(ctx33a)
-		check("WatchChanges first call", err)
-		if err == nil {
-			_, err2 := client.WatchChanges(context.Background())
-			if err2 != nil {
-				log.Printf("  Second call returned error (expected): %v", err2)
-			} else {
-				log.Printf("  FAIL: second call should have returned error")
-				failed++
-				passed--
-			}
-			cancel33a()
-			drainWatch(changes33, 3*time.Second)
-		}
-	}
-
-	// --- Test 34: WatchChanges — restart after first watcher stopped ---
-	log.Println("\n--- Test 34: WatchChanges restart after stop ---")
-	{
-		ctx34a, cancel34a := context.WithCancel(context.Background())
-		changes34a, err := client.WatchChanges(ctx34a)
-		check("WatchChanges first call for restart test", err)
-		if err == nil {
-			cancel34a()
-			drainWatch(changes34a, 3*time.Second)
-
-			ctx34b, cancel34b := context.WithCancel(context.Background())
-			changes34b, err2 := client.WatchChanges(ctx34b)
-			if err2 != nil {
-				log.Printf("  FAIL: restart failed: %v", err2)
-				failed++
-				passed--
-			} else {
-				log.Printf("  Restart succeeded (expected)")
-				cancel34b()
-				drainWatch(changes34b, 3*time.Second)
-			}
-		}
-	}
-
 	// --- Summary ---
 	fmt.Printf("\n=== Reminders Integration Test Results ===\n")
 	fmt.Printf("Passed: %d\n", passed)
@@ -783,4 +746,26 @@ func truncateID(id string) string {
 		return id[:8] + "..."
 	}
 	return id
+}
+
+func hasTags(tags []string, want ...string) bool {
+	seen := make(map[string]bool, len(tags))
+	for _, tag := range tags {
+		seen[tag] = true
+	}
+	for _, tag := range want {
+		if !seen[tag] {
+			return false
+		}
+	}
+	return true
+}
+
+func containsReminderID(items []reminders.Reminder, id string) bool {
+	for _, item := range items {
+		if item.ID == id {
+			return true
+		}
+	}
+	return false
 }

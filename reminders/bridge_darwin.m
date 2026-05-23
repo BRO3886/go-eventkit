@@ -186,6 +186,32 @@ static BOOL read_flagged(id remReminder) {
     return NO;
 }
 
+static NSArray<NSString*>* read_hashtag_names(id remReminder) {
+    if (!remReminder) return @[];
+    NSMutableArray<NSString*>* names = [NSMutableArray array];
+    @try {
+        id tags = [remReminder valueForKey:@"hashtags"];
+        if (!tags || ![tags respondsToSelector:@selector(count)] || [tags count] == 0) {
+            return @[];
+        }
+        for (id tag in tags) {
+            id name = nil;
+            @try {
+                name = [tag valueForKey:@"name"];
+            } @catch (NSException* e) {
+                name = nil;
+            }
+            if ([name isKindOfClass:[NSString class]] && [name length] > 0) {
+                [names addObject:name];
+            }
+        }
+    } @catch (NSException* e) {
+        return @[];
+    }
+    [names sortUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+    return names;
+}
+
 // Read the first URL attachment (as NSString) from a REMReminder, or nil if none.
 static NSString* read_url_attachment(id remReminder) {
     if (!remReminder) return nil;
@@ -263,6 +289,72 @@ static BOOL write_url_attachment(EKReminder* ekReminder, NSString* url) {
     NSError* err = nil;
     BOOL saved = ((BOOL(*)(id,SEL,NSError**))objc_msgSend)(saveReq, saveSel, &err);
     return saved;
+}
+
+static BOOL write_hashtags(EKReminder* ekReminder, NSArray<NSString*>* tags) {
+    if (!load_reminderkit()) return NO;
+    id remReminder = rem_reminder_from_ek(ekReminder);
+    if (!remReminder) return NO;
+
+    id remStore = nil;
+    Ivar storeIvar = find_ivar([remReminder class], "_store");
+    if (storeIvar) remStore = object_getIvar(remReminder, storeIvar);
+    if (!remStore) {
+        SEL storeSel = NSSelectorFromString(@"store");
+        if ([remReminder respondsToSelector:storeSel]) {
+            remStore = ((id(*)(id,SEL))objc_msgSend)(remReminder, storeSel);
+        }
+    }
+    Class remStoreClass = objc_getClass("REMStore");
+    if (!remStore || !remStoreClass || ![remStore isKindOfClass:remStoreClass]) return NO;
+
+    Class saveReqClass = objc_getClass("REMSaveRequest");
+    if (!saveReqClass) return NO;
+    id saveReq = [saveReqClass alloc];
+    SEL initSel = NSSelectorFromString(@"initWithStore:");
+    if (![saveReq respondsToSelector:initSel]) return NO;
+    saveReq = ((id(*)(id,SEL,id))objc_msgSend)(saveReq, initSel, remStore);
+    if (!saveReq) return NO;
+
+    SEL updateSel = NSSelectorFromString(@"updateReminder:");
+    if (![saveReq respondsToSelector:updateSel]) return NO;
+    id changeItem = ((id(*)(id,SEL,id))objc_msgSend)(saveReq, updateSel, remReminder);
+    if (!changeItem) return NO;
+
+    SEL hashtagCtxSel = NSSelectorFromString(@"hashtagContext");
+    if (![changeItem respondsToSelector:hashtagCtxSel]) return NO;
+    id hashtagCtx = ((id(*)(id,SEL))objc_msgSend)(changeItem, hashtagCtxSel);
+    if (!hashtagCtx) return NO;
+
+    SEL removeAllSel = NSSelectorFromString(@"removeAllHashtags");
+    if (![hashtagCtx respondsToSelector:removeAllSel]) return NO;
+    ((void(*)(id,SEL))objc_msgSend)(hashtagCtx, removeAllSel);
+
+    SEL addSel = NSSelectorFromString(@"addHashtagWithType:name:");
+    if (![hashtagCtx respondsToSelector:addSel]) return NO;
+    NSMutableSet<NSString*>* seen = [NSMutableSet set];
+    for (id rawTag in tags ?: @[]) {
+        if (![rawTag isKindOfClass:[NSString class]]) continue;
+        NSString* tag = [(NSString*)rawTag stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        while ([tag hasPrefix:@"#"]) tag = [tag substringFromIndex:1];
+        if (tag.length == 0) continue;
+        NSString* key = [tag lowercaseString];
+        if ([seen containsObject:key]) continue;
+        [seen addObject:key];
+        ((void(*)(id,SEL,NSInteger,id))objc_msgSend)(hashtagCtx, addSel, 0, tag);
+    }
+
+    SEL saveSel = NSSelectorFromString(@"saveSynchronouslyWithError:");
+    if (![saveReq respondsToSelector:saveSel]) return NO;
+    NSError* err = nil;
+    BOOL saved = ((BOOL(*)(id,SEL,NSError**))objc_msgSend)(saveReq, saveSel, &err);
+    if (!saved) return NO;
+
+    EKEventStore* store = get_store();
+    if ([store respondsToSelector:@selector(refreshSourcesIfNecessary)]) {
+        [store refreshSourcesIfNecessary];
+    }
+    return YES;
 }
 
 // Write the flagged state to an EKReminder via the private ReminderKit save
@@ -363,10 +455,14 @@ static NSDictionary* reminder_to_dict(EKReminder* r) {
     // underlying REMReminder (private ReminderKit) does. Read via the bridge,
     // falling back to NO if the private API is unavailable on this macOS.
     BOOL flagged = NO;
+    NSArray<NSString*>* tags = @[];
     if (load_reminderkit()) {
-        flagged = read_flagged(rem_reminder_from_ek(r));
+        id remReminder = rem_reminder_from_ek(r);
+        flagged = read_flagged(remReminder);
+        tags = read_hashtag_names(remReminder);
     }
     d[@"flagged"] = flagged ? @YES : @NO;
+    d[@"tags"] = tags ?: @[];
     d[@"priority"] = @(r.priority);
     d[@"hasAlarms"] = r.hasAlarms ? @YES : @NO;
 
@@ -618,7 +714,8 @@ ek_result_t ek_rem_fetch_reminders(const char* list_name,
                               const char* completed_filter,
                               const char* search_query,
                               const char* due_before,
-                              const char* due_after) {
+                              const char* due_after,
+                              const char* tags_json) {
     @autoreleasepool {
         ek_result_t res = {NULL, NULL};
         EKEventStore* store = get_store();
@@ -649,6 +746,23 @@ ek_result_t ek_rem_fetch_reminders(const char* list_name,
         // Search query.
         NSString* query = search_query ? [[NSString stringWithUTF8String:search_query] lowercaseString] : nil;
 
+        NSMutableArray<NSString*>* tagFilters = [NSMutableArray array];
+        if (tags_json) {
+            NSData* tagData = [NSData dataWithBytes:tags_json length:strlen(tags_json)];
+            NSError* tagParseError = nil;
+            id parsedTags = [NSJSONSerialization JSONObjectWithData:tagData options:0 error:&tagParseError];
+            if (![parsedTags isKindOfClass:[NSArray class]]) {
+                res.error = strdup([[NSString stringWithFormat:@"invalid tags JSON: %@", tagParseError.localizedDescription ?: @"expected array"] UTF8String]);
+                return res;
+            }
+            for (id rawTag in (NSArray*)parsedTags) {
+                if (![rawTag isKindOfClass:[NSString class]]) continue;
+                NSString* tag = [(NSString*)rawTag stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+                while ([tag hasPrefix:@"#"]) tag = [tag substringFromIndex:1];
+                if (tag.length > 0) [tagFilters addObject:[tag lowercaseString]];
+            }
+        }
+
         NSMutableArray* result = [NSMutableArray array];
         for (EKReminder* r in allReminders) {
             // Completed filter.
@@ -673,6 +787,23 @@ ek_result_t ek_rem_fetch_reminders(const char* list_name,
                 if (!dueDate) continue;
                 if (dueBeforeDate && [dueDate compare:dueBeforeDate] == NSOrderedDescending) continue;
                 if (dueAfterDate && [dueDate compare:dueAfterDate] == NSOrderedAscending) continue;
+            }
+
+            if (tagFilters.count > 0) {
+                id remReminder = load_reminderkit() ? rem_reminder_from_ek(r) : nil;
+                NSArray<NSString*>* tagNames = read_hashtag_names(remReminder);
+                NSMutableSet<NSString*>* tagSet = [NSMutableSet setWithCapacity:tagNames.count];
+                for (NSString* name in tagNames) {
+                    [tagSet addObject:[name lowercaseString]];
+                }
+                BOOL hasAllTags = YES;
+                for (NSString* tag in tagFilters) {
+                    if (![tagSet containsObject:tag]) {
+                        hasAllTags = NO;
+                        break;
+                    }
+                }
+                if (!hasAllTags) continue;
             }
 
             [result addObject:reminder_to_dict(r)];
@@ -887,6 +1018,16 @@ ek_result_t ek_rem_create_reminder(const char* json_input) {
                     EKReminder* postSave = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
                     if (postSave) reminder = postSave;
                 }
+            }
+
+            if (input[@"tags"] != nil && input[@"tags"] != [NSNull null]) {
+                EKReminder* fresh = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
+                if (!fresh || !write_hashtags(fresh, input[@"tags"])) {
+                    res.error = strdup([@"failed to write reminder tags via ReminderKit" UTF8String]);
+                    return;
+                }
+                EKReminder* postSave = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
+                reminder = postSave ?: fresh;
             }
 
             res.result = to_json(reminder_to_dict(reminder));
@@ -1105,6 +1246,16 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
                     EKReminder* postSave = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
                     reminder = postSave ?: fresh;
                 }
+            }
+
+            if (input[@"tags"] != nil && input[@"tags"] != [NSNull null]) {
+                EKReminder* fresh = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
+                if (!fresh || !write_hashtags(fresh, input[@"tags"])) {
+                    res.error = strdup([@"failed to write reminder tags via ReminderKit" UTF8String]);
+                    return;
+                }
+                EKReminder* postSave = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
+                reminder = postSave ?: fresh;
             }
 
             res.result = to_json(reminder_to_dict(reminder));

@@ -23,7 +23,8 @@ ek_result_t ek_rem_fetch_reminders(const char* list_name,
                               const char* completed_filter,
                               const char* search_query,
                               const char* due_before,
-                              const char* due_after);
+                              const char* due_after,
+                              const char* tags_json);
 
 // ek_rem_get_reminder returns a single reminder as JSON by ID or ID prefix.
 // Caller must free the result string with ek_rem_free.

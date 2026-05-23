@@ -120,6 +120,8 @@ type Reminder struct {
 	Flagged bool `json:"flagged"`
 	// URL is an optional URL associated with the reminder.
 	URL string `json:"url,omitempty"`
+	// Tags are native Reminders hashtags without the leading "#".
+	Tags []string `json:"tags,omitempty"`
 	// Recurring is true if this reminder has recurrence rules.
 	Recurring bool `json:"recurring"`
 	// RecurrenceRules contains the recurrence patterns for this reminder.
@@ -220,6 +222,7 @@ type listOptions struct {
 	search    string
 	dueBefore *time.Time
 	dueAfter  *time.Time
+	tags      []string
 }
 
 // WithList filters reminders by list name.
@@ -251,6 +254,11 @@ func WithDueBefore(t time.Time) ListOption {
 // WithDueAfter filters reminders due after the given date.
 func WithDueAfter(t time.Time) ListOption {
 	return func(o *listOptions) { o.dueAfter = &t }
+}
+
+// WithTags filters reminders by native Reminders tags. Multiple tags use AND logic.
+func WithTags(tags ...string) ListOption {
+	return func(o *listOptions) { o.tags = append([]string(nil), tags...) }
 }
 
 // CreateListInput contains the fields for creating a new reminder list via
@@ -310,6 +318,8 @@ type CreateReminderInput struct {
 	// Flagged sets the flagged state on creation. Written via the private
 	// ReminderKit framework since EventKit does not expose this property.
 	Flagged bool
+	// Tags sets native Reminders hashtags without the leading "#".
+	Tags []string
 	// Alarms adds notification alarms to the reminder.
 	Alarms []Alarm
 	// RecurrenceRules sets the recurrence pattern(s) for the reminder.
@@ -346,6 +356,9 @@ type UpdateReminderInput struct {
 	Flagged *bool
 	// URL updates the associated URL.
 	URL *string
+	// Tags replaces native Reminders hashtags. Pass an empty slice to remove all tags.
+	// Pass nil to leave tags unchanged.
+	Tags *[]string
 	// Alarms replaces all existing alarms. Pass an empty slice to remove all alarms.
 	Alarms *[]Alarm
 	// RecurrenceRules replaces all existing recurrence rules.
