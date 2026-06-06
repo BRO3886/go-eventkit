@@ -1009,6 +1009,11 @@ ek_result_t ek_rem_create_reminder(const char* json_input) {
 
             // Flagged is set via the private ReminderKit API (EventKit doesn't
             // expose it). Only write if explicitly true — false is the default.
+            // A failure here is intentionally NON-fatal: the reminder is already
+            // saved, so erroring would orphan it (caller gets nil + error but the
+            // item exists). Degrade silently to flagged=false. Callers that need to
+            // detect failure should set flagged via a follow-up UpdateReminder,
+            // which surfaces the error without risking an orphaned create.
             if (input[@"flagged"] && input[@"flagged"] != [NSNull null] && [input[@"flagged"] boolValue]) {
                 EKReminder* fresh = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
                 if (fresh && write_flagged(fresh, YES)) {
@@ -1241,11 +1246,13 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
             // Key presence signals intent: present = set to bool value, absent = unchanged.
             if (input[@"flagged"] != nil && input[@"flagged"] != [NSNull null]) {
                 EKReminder* fresh = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
-                if (fresh && write_flagged(fresh, [input[@"flagged"] boolValue])) {
-                    // Refetch post-save so returned dict reflects the new value.
-                    EKReminder* postSave = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
-                    reminder = postSave ?: fresh;
+                if (!fresh || !write_flagged(fresh, [input[@"flagged"] boolValue])) {
+                    res.error = strdup([@"failed to write reminder flagged state via ReminderKit" UTF8String]);
+                    return;
                 }
+                // Refetch post-save so returned dict reflects the new value.
+                EKReminder* postSave = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
+                reminder = postSave ?: fresh;
             }
 
             if (input[@"tags"] != nil && input[@"tags"] != [NSNull null]) {
