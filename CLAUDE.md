@@ -90,7 +90,8 @@ go-eventkit/
 - Events require date ranges for queries (can't fetch all unbounded)
 - `eventIdentifier` is stable across recurrence edits (use this, not `calendarItemIdentifier`)
 - Attendees/organizer are **read-only** — Apple limitation
-- `isFlagged` does not exist on EKReminder — always returns false
+- **Flagged via private ReminderKit** (v0.7.0+): `EKReminder.isFlagged` doesn't exist, but `REMReminder.flagged` does. Read via KVC (`valueForKey:@"flagged"`), write via `REMSaveRequest` → `changeItem.flaggedContext.setFlagged:`. **Asymmetric error contract (v0.10.0+):** `ek_rem_update_reminder` RETURNS an error when `write_flagged` fails (so consumers can detect + degrade), but `ek_rem_create_reminder` stays SILENT — erroring after `saveReminder:` already succeeded would orphan the reminder (caller gets nil+error for an item that exists). Tags follow the same write pattern; the tags create-path still carries the orphan footgun. Bridge errors are NOT mapped to the exported sentinels (`ErrNotFound` etc.) — the raw strdup'd string is wrapped opaquely.
+- **No native move across the sharing boundary**: EventKit treats a shared/collaborative list as its own source, so moving a reminder via `reminder.calendar = cal; saveReminder:` is rejected with `-3002` when a shared list is on either end. Public EventKit has NO move API (only save/remove). Fix path (issue #13): private `REMSaveRequest` reparent — AppleScript's `move` proves a sanctioned path exists; delete+recreate is the lossy fallback (new ID, no subtask support).
 - EventKit sees all accounts (iCloud, Google, Exchange, subscriptions, birthdays)
 - `@(!boolean)` produces integer 0/1, not JSON true/false — use `@YES`/`@NO` ternary
 - `parse.go` files have no build tags — all JSON parsing is fully testable without cgo
@@ -129,6 +130,11 @@ Test coverage ceiling is ~55-57% because cgo bridge functions (bridge_darwin.go)
 - **dateparser consumer migration**:
   - cal: `dateparser.ParseDate(input)` — no options, defaults match cal behavior
   - rem: `dateparser.ParseDate(input, dateparser.WithDefaultHour(9), dateparser.WithSmartTimeRollover(), dateparser.WithEOWSkipToday())`
+
+## Releasing
+- **Merge/push to `main` BEFORE tagging. Never tag an unmerged commit.** A release here is just a git tag (go modules resolve by tag, no binary), but it MUST point at a commit already on `main`.
+- **Why this rule exists:** v0.9.0 was tagged from commit `c32f341`, which lived only locally on top of `main` — only the tag was pushed, so `main` sat ~2 weeks behind its own release and a later PR looked like it was re-introducing the released feature. Correct order: merge PR → `git checkout main && git pull --ff-only` → `git tag vX.Y.Z` → `git push origin vX.Y.Z`.
+- **Bump rule (pre-1.0):** an observable behavior/error-contract change is a MINOR bump, not a patch (e.g. v0.10.0 for the flagged update-path error contract).
 
 ## Journal
 Engineering journals live in `journals/` dir. See `.claude/commands/journal.md` for the journaling command.
