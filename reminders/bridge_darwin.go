@@ -66,7 +66,7 @@ func (c *Client) Lists() ([]List, error) {
 func (c *Client) Reminders(opts ...ListOption) ([]Reminder, error) {
 	o := applyOptions(opts)
 
-	var cList, cCompleted, cSearch, cBefore, cAfter *C.char
+	var cList, cCompleted, cSearch, cBefore, cAfter, cTags *C.char
 
 	if o.listName != "" {
 		cList = C.CString(o.listName)
@@ -100,8 +100,16 @@ func (c *Client) Reminders(opts ...ListOption) ([]Reminder, error) {
 		cAfter = C.CString(s)
 		defer C.free(unsafe.Pointer(cAfter))
 	}
+	if len(o.tags) > 0 {
+		data, err := json.Marshal(o.tags)
+		if err != nil {
+			return nil, fmt.Errorf("reminders: failed to marshal tags filter: %w", err)
+		}
+		cTags = C.CString(string(data))
+		defer C.free(unsafe.Pointer(cTags))
+	}
 
-	res := C.ek_rem_fetch_reminders(cList, cCompleted, cSearch, cBefore, cAfter)
+	res := C.ek_rem_fetch_reminders(cList, cCompleted, cSearch, cBefore, cAfter, cTags)
 	if res.error != nil {
 		return nil, fmt.Errorf("reminders: %w", resultErr(res))
 	}

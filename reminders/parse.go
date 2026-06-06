@@ -24,6 +24,7 @@ type rawReminder struct {
 	Completed       bool                `json:"completed"`
 	Flagged         bool                `json:"flagged"`
 	URL             *string             `json:"url"`
+	Tags            []string            `json:"tags"`
 	Recurring       bool                `json:"recurring"`
 	RecurrenceRules []rawRecurrenceRule `json:"recurrenceRules"`
 	HasAlarms       bool                `json:"hasAlarms"`
@@ -36,15 +37,15 @@ type rawAlarm struct {
 }
 
 type rawRecurrenceRule struct {
-	Frequency       int                       `json:"frequency"`
-	Interval        int                       `json:"interval"`
-	DaysOfTheWeek   []rawRecurrenceDayOfWeek  `json:"daysOfTheWeek,omitempty"`
-	DaysOfTheMonth  []int                     `json:"daysOfTheMonth,omitempty"`
-	MonthsOfTheYear []int                     `json:"monthsOfTheYear,omitempty"`
-	WeeksOfTheYear  []int                     `json:"weeksOfTheYear,omitempty"`
-	DaysOfTheYear   []int                     `json:"daysOfTheYear,omitempty"`
-	SetPositions    []int                     `json:"setPositions,omitempty"`
-	End             *rawRecurrenceEnd         `json:"end,omitempty"`
+	Frequency       int                      `json:"frequency"`
+	Interval        int                      `json:"interval"`
+	DaysOfTheWeek   []rawRecurrenceDayOfWeek `json:"daysOfTheWeek,omitempty"`
+	DaysOfTheMonth  []int                    `json:"daysOfTheMonth,omitempty"`
+	MonthsOfTheYear []int                    `json:"monthsOfTheYear,omitempty"`
+	WeeksOfTheYear  []int                    `json:"weeksOfTheYear,omitempty"`
+	DaysOfTheYear   []int                    `json:"daysOfTheYear,omitempty"`
+	SetPositions    []int                    `json:"setPositions,omitempty"`
+	End             *rawRecurrenceEnd        `json:"end,omitempty"`
 }
 
 type rawRecurrenceDayOfWeek struct {
@@ -124,6 +125,7 @@ func convertRawReminder(r *rawReminder) Reminder {
 		Completed:      r.Completed,
 		Flagged:        r.Flagged,
 		URL:            derefString(r.URL),
+		Tags:           append([]string(nil), r.Tags...),
 		Recurring:      r.Recurring,
 		HasAlarms:      r.HasAlarms,
 	}
@@ -274,6 +276,9 @@ func marshalCreateInput(input CreateReminderInput) (string, error) {
 	if input.Flagged {
 		m["flagged"] = true
 	}
+	if len(input.Tags) > 0 {
+		m["tags"] = input.Tags
+	}
 	if input.Priority != PriorityNone {
 		m["priority"] = int(input.Priority)
 	}
@@ -335,6 +340,9 @@ func marshalUpdateInput(input UpdateReminderInput) (string, error) {
 	}
 	if input.Flagged != nil {
 		m["flagged"] = *input.Flagged
+	}
+	if input.Tags != nil {
+		m["tags"] = *input.Tags
 	}
 
 	if input.ClearDueDate {

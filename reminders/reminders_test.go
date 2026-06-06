@@ -19,14 +19,14 @@ func TestPriorityString(t *testing.T) {
 		{PriorityHigh, "high"},
 		{PriorityMedium, "medium"},
 		{PriorityLow, "low"},
-		{Priority(2), "high"},   // 1-4 = high
-		{Priority(3), "high"},   // 1-4 = high
-		{Priority(4), "high"},   // 1-4 = high
-		{Priority(6), "low"},    // 6-9 = low
-		{Priority(7), "low"},    // 6-9 = low
-		{Priority(8), "low"},    // 6-9 = low
-		{Priority(10), "none"},  // out of range
-		{Priority(-1), "none"},  // negative
+		{Priority(2), "high"},  // 1-4 = high
+		{Priority(3), "high"},  // 1-4 = high
+		{Priority(4), "high"},  // 1-4 = high
+		{Priority(6), "low"},   // 6-9 = low
+		{Priority(7), "low"},   // 6-9 = low
+		{Priority(8), "low"},   // 6-9 = low
+		{Priority(10), "none"}, // out of range
+		{Priority(-1), "none"}, // negative
 	}
 	for _, tt := range tests {
 		got := tt.p.String()
@@ -390,6 +390,7 @@ func TestMarshalCreateInput(t *testing.T) {
 			RemindMeDate: &remind,
 			Priority:     PriorityHigh,
 			URL:          "https://example.com",
+			Tags:         []string{"work", "urgent"},
 		}
 		jsonStr, err := marshalCreateInput(input)
 		if err != nil {
@@ -410,6 +411,10 @@ func TestMarshalCreateInput(t *testing.T) {
 		}
 		if m["url"] != "https://example.com" {
 			t.Errorf("url = %v", m["url"])
+		}
+		tags := m["tags"].([]any)
+		if len(tags) != 2 || tags[0] != "work" || tags[1] != "urgent" {
+			t.Errorf("tags = %v, want [work urgent]", tags)
 		}
 		if m["priority"] != float64(1) {
 			t.Errorf("priority = %v", m["priority"])
@@ -457,6 +462,19 @@ func TestMarshalCreateInput(t *testing.T) {
 		alarms := m["alarms"].([]any)
 		if len(alarms) != 2 {
 			t.Fatalf("alarms len = %d, want 2", len(alarms))
+		}
+	})
+
+	t.Run("empty tags omitted from create", func(t *testing.T) {
+		input := CreateReminderInput{Title: "No Tags"}
+		jsonStr, err := marshalCreateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+		if _, ok := m["tags"]; ok {
+			t.Error("tags should not be present when empty")
 		}
 	})
 
@@ -617,6 +635,53 @@ func TestMarshalUpdateInput(t *testing.T) {
 		}
 	})
 
+	t.Run("replace tags", func(t *testing.T) {
+		tags := []string{"deep-work", "5min"}
+		input := UpdateReminderInput{Tags: &tags}
+		jsonStr, err := marshalUpdateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+		got := m["tags"].([]any)
+		if len(got) != 2 || got[0] != "deep-work" || got[1] != "5min" {
+			t.Errorf("tags = %v, want [deep-work 5min]", got)
+		}
+	})
+
+	t.Run("clear tags with empty slice", func(t *testing.T) {
+		tags := []string{}
+		input := UpdateReminderInput{Tags: &tags}
+		jsonStr, err := marshalUpdateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+		got, ok := m["tags"].([]any)
+		if !ok {
+			t.Fatal("tags key must be present (empty slice = clear signal)")
+		}
+		if len(got) != 0 {
+			t.Errorf("tags = %v, want empty slice", got)
+		}
+	})
+
+	t.Run("omit tags when nil", func(t *testing.T) {
+		title := "unrelated"
+		input := UpdateReminderInput{Title: &title}
+		jsonStr, err := marshalUpdateInput(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var m map[string]any
+		json.Unmarshal([]byte(jsonStr), &m)
+		if _, ok := m["tags"]; ok {
+			t.Error("tags key should not be present when UpdateReminderInput.Tags is nil")
+		}
+	})
+
 	// Clearing the URL is done by setting it to empty string. The bridge
 	// uses presence of the url key to decide whether to touch the attachment,
 	// so an empty string MUST serialize through (unlike the create path where
@@ -751,6 +816,7 @@ func TestConvertRawReminder(t *testing.T) {
 			Completed: true,
 			Flagged:   false,
 			URL:       &url,
+			Tags:      []string{"work", "urgent"},
 			HasAlarms: true,
 			Alarms: []rawAlarm{
 				{AbsoluteDate: &remind, RelativeOffset: 0},
@@ -771,6 +837,9 @@ func TestConvertRawReminder(t *testing.T) {
 		}
 		if !r.Completed {
 			t.Error("should be completed")
+		}
+		if len(r.Tags) != 2 || r.Tags[0] != "work" || r.Tags[1] != "urgent" {
+			t.Errorf("Tags = %v, want [work urgent]", r.Tags)
 		}
 		if len(r.Alarms) != 1 {
 			t.Errorf("Alarms len = %d", len(r.Alarms))

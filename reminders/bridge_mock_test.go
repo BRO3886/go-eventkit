@@ -26,6 +26,7 @@ func simulateRemindersResponse(reminders []Reminder) string {
 			Priority:  int(r.Priority),
 			Completed: r.Completed,
 			Flagged:   r.Flagged,
+			Tags:      append([]string(nil), r.Tags...),
 			Recurring: r.Recurring,
 			HasAlarms: r.HasAlarms,
 			Alarms:    []rawAlarm{},
@@ -170,20 +171,20 @@ func TestMockRemindersRoundtrip(t *testing.T) {
 
 	input := []Reminder{
 		{
-			ID:             "rem-1",
-			Title:          "Buy groceries",
-			Notes:          "Milk, eggs, bread",
-			List:           "Shopping",
-			ListID:         "list-2",
-			DueDate:        &due,
-			RemindMeDate:   &remind,
-			CreatedAt:      &now,
-			ModifiedAt:     &now,
-			Priority:       PriorityHigh,
-			Completed:      false,
-			Flagged:        false,
-			URL:            "https://example.com/list",
-			HasAlarms:      true,
+			ID:           "rem-1",
+			Title:        "Buy groceries",
+			Notes:        "Milk, eggs, bread",
+			List:         "Shopping",
+			ListID:       "list-2",
+			DueDate:      &due,
+			RemindMeDate: &remind,
+			CreatedAt:    &now,
+			ModifiedAt:   &now,
+			Priority:     PriorityHigh,
+			Completed:    false,
+			Flagged:      false,
+			URL:          "https://example.com/list",
+			HasAlarms:    true,
 			Alarms: []Alarm{
 				{RelativeOffset: -30 * time.Minute},
 			},
@@ -721,6 +722,7 @@ func TestMockRecurrenceRoundtrip(t *testing.T) {
 			Title:     "Daily standup",
 			List:      "Work",
 			ListID:    "list-1",
+			Tags:      []string{"standup", "work"},
 			Recurring: true,
 			RecurrenceRules: []eventkit.RecurrenceRule{
 				eventkit.Daily(1).Count(30),
@@ -784,6 +786,9 @@ func TestMockRecurrenceRoundtrip(t *testing.T) {
 	}
 	if r0.RecurrenceRules[0].End == nil || r0.RecurrenceRules[0].End.OccurrenceCount != 30 {
 		t.Errorf("r0 end = %+v, want count=30", r0.RecurrenceRules[0].End)
+	}
+	if len(r0.Tags) != 2 || r0.Tags[0] != "standup" || r0.Tags[1] != "work" {
+		t.Errorf("r0 tags = %v, want [standup work]", r0.Tags)
 	}
 
 	// Weekly with days and end date.
