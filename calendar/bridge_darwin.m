@@ -160,6 +160,105 @@ int ek_cal_conference_selectors_available(void) {
             [EKEvent instancesRespondToSelector:NSSelectorFromString(@"conferenceURL")]) ? 1 : 0;
 }
 
+// --- Attendees (private EventKit write path) ---
+//
+// EventKit has no public API to add attendees. EKAttendee exposes the private
+// factory +attendeeWithName:emailAddress: and EKCalendarItem the private
+// -addAttendee:. Calendar.app also primes new invitations with
+// -addOrganizerAndSelfAttendeeForNewInvitation so the organizer/self attendee
+// exist before invitees are added. All calls are guarded; if any selector is
+// missing the helper reports failure and the caller surfaces ErrUnsupported.
+
+int ek_cal_attendee_selectors_available(void) {
+    Class attendeeClass = objc_getClass("EKAttendee");
+    BOOL factory = attendeeClass &&
+        [attendeeClass respondsToSelector:NSSelectorFromString(@"attendeeWithName:emailAddress:")];
+    BOOL add = [EKEvent instancesRespondToSelector:NSSelectorFromString(@"addAttendee:")];
+    return (factory && add) ? 1 : 0;
+}
+
+// add_attendees_to_event attaches the given attendee dicts ({name,email}) to
+// the event via private API. Returns YES on success (including an empty list),
+// NO if the private API is unavailable or any attendee could not be built.
+static BOOL add_attendees_to_event(EKEvent* event, NSArray* attendees) {
+    if (!attendees || attendees.count == 0) return YES;
+    if (!ek_cal_attendee_selectors_available()) return NO;
+
+    Class attendeeClass = objc_getClass("EKAttendee");
+    SEL factorySel = NSSelectorFromString(@"attendeeWithName:emailAddress:");
+    SEL addSel = NSSelectorFromString(@"addAttendee:");
+
+    // Prime organizer + self attendee the way Calendar.app does, when possible.
+    SEL primeSel = NSSelectorFromString(@"addOrganizerAndSelfAttendeeForNewInvitation");
+    if ([event respondsToSelector:primeSel]) {
+        @try {
+            ((void(*)(id, SEL))objc_msgSend)(event, primeSel);
+        } @catch (NSException* ex) {
+            // Non-fatal — some accounts don't require/allow priming.
+        }
+    }
+
+    for (NSDictionary* a in attendees) {
+        NSString* email = a[@"email"];
+        if (![email isKindOfClass:[NSString class]] || email.length == 0) return NO;
+        NSString* name = [a[@"name"] isKindOfClass:[NSString class]] ? a[@"name"] : email;
+        id attendee = nil;
+        @try {
+            attendee = ((id(*)(id, SEL, id, id))objc_msgSend)(attendeeClass, factorySel, name, email);
+        } @catch (NSException* ex) {
+            return NO;
+        }
+        if (!attendee) return NO;
+        @try {
+            ((void(*)(id, SEL, id))objc_msgSend)(event, addSel, attendee);
+        } @catch (NSException* ex) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
+// --- Travel time ---
+
+static double travel_time_for_event(EKEvent* e) {
+    SEL sel = NSSelectorFromString(@"travelTime");
+    if (![e respondsToSelector:sel]) return 0;
+    @try {
+        return ((double(*)(id, SEL))objc_msgSend)(e, sel);
+    } @catch (NSException* ex) {
+        return 0;
+    }
+}
+
+static void set_travel_time_for_event(EKEvent* e, double seconds) {
+    SEL sel = NSSelectorFromString(@"setTravelTime:");
+    if (![e respondsToSelector:sel]) return;
+    @try {
+        ((void(*)(id, SEL, double))objc_msgSend)(e, sel, seconds);
+    } @catch (NSException* ex) {
+    }
+}
+
+// --- Self participant status (RSVP read) ---
+
+static NSInteger self_participant_status(EKEvent* e) {
+    SEL sel = NSSelectorFromString(@"selfParticipantStatus");
+    if (![e respondsToSelector:sel]) {
+        // Fall back to the public selfAttendee.participantStatus.
+        if (e.attendees) {
+            for (EKParticipant* p in e.attendees) {
+                if (p.isCurrentUser) return p.participantStatus;
+            }
+        }
+        return EKParticipantStatusUnknown;
+    }
+    @try {
+        return ((NSInteger(*)(id, SEL))objc_msgSend)(e, sel);
+    } @catch (NSException* ex) {
+        return EKParticipantStatusUnknown;
+    }
+}
+
 // --- Event to dictionary conversion ---
 
 static NSDictionary* event_to_dict(EKEvent* e) {
@@ -173,6 +272,8 @@ static NSDictionary* event_to_dict(EKEvent* e) {
     d[@"notes"] = e.notes ?: [NSNull null];
     d[@"url"] = e.URL ? [e.URL absoluteString] : [NSNull null];
     d[@"conferenceURL"] = conference_url_for_event(e) ?: [NSNull null];
+    d[@"travelTime"] = @(travel_time_for_event(e));
+    d[@"selfStatus"] = @(self_participant_status(e));
     d[@"calendar"] = e.calendar.title ?: @"";
     d[@"calendarID"] = e.calendar.calendarIdentifier ?: @"";
     d[@"status"] = @(e.status);
@@ -745,6 +846,21 @@ ek_result_t ek_cal_create_event(const char* json_input) {
                 event.structuredLocation = loc;
             }
 
+            // Travel time (private API; no-op if unavailable).
+            if (input[@"travelTime"] && input[@"travelTime"] != [NSNull null]) {
+                set_travel_time_for_event(event, [input[@"travelTime"] doubleValue]);
+            }
+
+            // Attendees (private API). Fail loudly if requested but unsupported
+            // so the caller doesn't silently save an event without invitees.
+            if (input[@"attendees"] && input[@"attendees"] != [NSNull null]) {
+                NSArray* attendees = input[@"attendees"];
+                if (attendees.count > 0 && !add_attendees_to_event(event, attendees)) {
+                    res.error = strdup([@"attendees are not supported on this macOS or could not be added" UTF8String]);
+                    return;
+                }
+            }
+
             // Save.
             NSError* saveError = nil;
             BOOL saved = [store saveEvent:event span:EKSpanThisEvent commit:YES error:&saveError];
@@ -950,6 +1066,20 @@ ek_result_t ek_cal_update_event(const char* event_id, const char* json_input, in
                         loc.radius = [radius doubleValue];
                     }
                     event.structuredLocation = loc;
+                }
+            }
+
+            // Travel time (private API; no-op if unavailable).
+            if (input[@"travelTime"] != nil && input[@"travelTime"] != [NSNull null]) {
+                set_travel_time_for_event(event, [input[@"travelTime"] doubleValue]);
+            }
+
+            // Attendees (private API). Adds to the existing attendee list.
+            if (input[@"attendees"] != nil && input[@"attendees"] != [NSNull null]) {
+                NSArray* attendees = input[@"attendees"];
+                if (attendees.count > 0 && !add_attendees_to_event(event, attendees)) {
+                    res.error = strdup([@"attendees are not supported on this macOS or could not be added" UTF8String]);
+                    return;
                 }
             }
 
@@ -1257,5 +1387,271 @@ ek_result_t ek_cal_delete_event(const char* event_id, int span) {
             res.result = strdup("ok");
         }
     });
+    return res;
+}
+
+// --- RSVP: respond to an invitation ---
+
+int ek_cal_rsvp_selectors_available(void) {
+    return ([EKEvent instancesRespondToSelector:NSSelectorFromString(@"setAttendeeStatus:")] ||
+            [EKEvent instancesRespondToSelector:NSSelectorFromString(@"selfParticipantStatus")]) ? 1 : 0;
+}
+
+// ek_cal_respond_to_event sets the current user's participation status on an
+// event invitation. status uses EKParticipantStatus values (2=accepted,
+// 3=declined, 4=tentative). Returns "ok" on success.
+ek_result_t ek_cal_respond_to_event(const char* event_id, int status) {
+    __block ek_result_t res = {NULL, NULL};
+    dispatch_sync(get_write_queue(), ^{
+        @autoreleasepool {
+            if (!event_id) {
+                res.error = strdup([@"event ID is required" UTF8String]);
+                return;
+            }
+            EKEventStore* store = get_store();
+            EKEvent* event = [store eventWithIdentifier:[NSString stringWithUTF8String:event_id]];
+            if (!event) {
+                res.error = strdup([[NSString stringWithFormat:@"event not found: %s", event_id] UTF8String]);
+                return;
+            }
+
+            // Prefer -setAttendeeStatus: (updates self attendee + flags the
+            // event for a reply to the organizer on save). Fall back to setting
+            // the self attendee's participant status directly.
+            SEL setStatusSel = NSSelectorFromString(@"setAttendeeStatus:");
+            BOOL applied = NO;
+            if ([event respondsToSelector:setStatusSel]) {
+                @try {
+                    ((void(*)(id, SEL, NSInteger))objc_msgSend)(event, setStatusSel, (NSInteger)status);
+                    applied = YES;
+                } @catch (NSException* ex) {
+                    applied = NO;
+                }
+            }
+            if (!applied) {
+                SEL selfSel = NSSelectorFromString(@"selfAttendee");
+                if ([event respondsToSelector:selfSel]) {
+                    id self_att = ((id(*)(id, SEL))objc_msgSend)(event, selfSel);
+                    SEL setPartSel = NSSelectorFromString(@"setParticipantStatus:");
+                    if (self_att && [self_att respondsToSelector:setPartSel]) {
+                        @try {
+                            ((void(*)(id, SEL, NSInteger))objc_msgSend)(self_att, setPartSel, (NSInteger)status);
+                            applied = YES;
+                        } @catch (NSException* ex) {
+                            applied = NO;
+                        }
+                    }
+                }
+            }
+            if (!applied) {
+                res.error = strdup([@"RSVP is not supported on this macOS or this event cannot be responded to" UTF8String]);
+                return;
+            }
+
+            NSError* saveError = nil;
+            BOOL saved = [store saveEvent:event span:EKSpanThisEvent commit:YES error:&saveError];
+            if (!saved) {
+                res.error = strdup([[NSString stringWithFormat:@"failed to save RSVP: %@",
+                    saveError.localizedDescription] UTF8String]);
+                return;
+            }
+            res.result = strdup("ok");
+        }
+    });
+    return res;
+}
+
+// --- Free/busy availability ---
+
+int ek_cal_availability_selectors_available(void) {
+    Class opClass = objc_getClass("EKRequestAvailabilityOperation");
+    return opClass ? 1 : 0;
+}
+
+// ek_cal_request_availability looks up free/busy spans for the given addresses
+// between start and end. Returns a JSON object mapping each address to an array
+// of {startDate,endDate,type} spans (type: 0=free,1=busy,2=tentative,
+// 3=unavailable). Only sources whose backing server supports availability
+// requests are queried (iCloud, for instance, does not). Addresses with no
+// data are returned with an empty array.
+ek_result_t ek_cal_request_availability(const char* start_date, const char* end_date, const char* json_addresses) {
+    ek_result_t res = {NULL, NULL};
+    @autoreleasepool {
+        if (!start_date || !end_date || !json_addresses) {
+            res.error = strdup([@"start, end, and addresses are required" UTF8String]);
+            return res;
+        }
+        if (!ek_cal_availability_selectors_available()) {
+            res.error = strdup([@"availability lookup is not supported on this macOS" UTF8String]);
+            return res;
+        }
+        NSDate* start = parse_iso_date(start_date);
+        NSDate* end = parse_iso_date(end_date);
+        if (!start || !end) {
+            res.error = strdup([@"invalid start or end date" UTF8String]);
+            return res;
+        }
+        NSData* addrData = [NSData dataWithBytes:json_addresses length:strlen(json_addresses)];
+        NSError* parseErr = nil;
+        NSArray* addresses = [NSJSONSerialization JSONObjectWithData:addrData options:0 error:&parseErr];
+        if (![addresses isKindOfClass:[NSArray class]] || addresses.count == 0) {
+            res.error = strdup([@"addresses must be a non-empty JSON array" UTF8String]);
+            return res;
+        }
+
+        EKEventStore* store = get_store();
+        NSMutableArray<EKSource*>* sources = [NSMutableArray array];
+        SEL supSel = NSSelectorFromString(@"constraintSupportsAvailabilityRequests");
+        SEL cacheSel = NSSelectorFromString(@"availabilityCache");
+        for (EKSource* s in store.sources) {
+            if ([s respondsToSelector:supSel] &&
+                ((BOOL(*)(id, SEL))objc_msgSend)(s, supSel)) {
+                [sources addObject:s];
+            }
+        }
+        if (sources.count == 0) {
+            res.error = strdup([@"no calendar account supports availability lookups (iCloud does not; an Exchange or Google Workspace account is required)" UTF8String]);
+            return res;
+        }
+
+        SEL reqSel = NSSelectorFromString(@"requestAvailabilityBetweenStartDate:endDate:ignoredEventID:addresses:resultsBlock:completionBlock:");
+
+        // Free/busy visibility depends on which account asks: an address is
+        // typically only resolvable through a source in its own organization.
+        // Query every availability-capable source and merge — the first source
+        // that returns spans for a given address wins, so we don't clobber real
+        // data with an empty cross-domain result.
+        __block NSMutableDictionary* output = [NSMutableDictionary dictionary];
+        NSInteger attempted = 0;
+
+        for (EKSource* source in sources) {
+            id cache = [source respondsToSelector:cacheSel]
+                ? ((id(*)(id, SEL))objc_msgSend)(source, cacheSel) : nil;
+            if (!cache || ![cache respondsToSelector:reqSel]) continue;
+            attempted++;
+
+            dispatch_semaphore_t done = dispatch_semaphore_create(0);
+            void (^resultsBlock)(id) = ^(id results) {
+                if (![results isKindOfClass:[NSDictionary class]]) return;
+                [(NSDictionary*)results enumerateKeysAndObjectsUsingBlock:^(id addr, id spans, BOOL* stop) {
+                    NSString* key = [addr description];
+                    // Keep the first non-empty span set seen for this address.
+                    if ([output[key] isKindOfClass:[NSArray class]] && [output[key] count] > 0) return;
+                    NSMutableArray* arr = [NSMutableArray array];
+                    if ([spans isKindOfClass:[NSArray class]]) {
+                        for (id span in spans) {
+                            NSMutableDictionary* sd = [NSMutableDictionary dictionary];
+                            @try {
+                                NSDate* sd0 = [span valueForKey:@"startDate"];
+                                NSDate* sd1 = [span valueForKey:@"endDate"];
+                                if (sd0) sd[@"startDate"] = format_date(sd0);
+                                if (sd1) sd[@"endDate"] = format_date(sd1);
+                                SEL typeSel = NSSelectorFromString(@"type");
+                                if ([span respondsToSelector:typeSel]) {
+                                    sd[@"type"] = @(((NSInteger(*)(id, SEL))objc_msgSend)(span, typeSel));
+                                }
+                            } @catch (NSException* ex) {
+                                continue;
+                            }
+                            [arr addObject:sd];
+                        }
+                    }
+                    output[key] = arr;
+                }];
+            };
+            void (^completionBlock)(id) = ^(id err) {
+                dispatch_semaphore_signal(done);
+            };
+
+            @try {
+                ((void(*)(id, SEL, id, id, id, id, id, id))objc_msgSend)(
+                    cache, reqSel, start, end, (id)nil, addresses, resultsBlock, completionBlock);
+            } @catch (NSException* ex) {
+                dispatch_semaphore_signal(done);
+                continue;
+            }
+            // Bounded wait per source so one hung server can't block forever.
+            dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 15LL*NSEC_PER_SEC));
+        }
+
+        if (attempted == 0) {
+            res.error = strdup([@"availability cache is unavailable on this macOS" UTF8String]);
+            return res;
+        }
+        // Ensure every requested address appears, even with no spans.
+        for (NSString* a in addresses) {
+            if (!output[a]) output[a] = @[];
+        }
+        res.result = to_json(output);
+        if (!res.result) res.error = strdup("JSON serialization failed");
+    }
+    return res;
+}
+
+// --- Invitation inbox ---
+
+int ek_cal_notifications_selectors_available(void) {
+    return [get_store() respondsToSelector:NSSelectorFromString(@"eventNotifications")] ? 1 : 0;
+}
+
+// ek_cal_event_notifications returns pending event invitations as a JSON array
+// of {title,startDate,endDate,location,organizer,status,allDay}. Returns an
+// empty array when there are none or the private API is unavailable.
+ek_result_t ek_cal_event_notifications(void) {
+    ek_result_t res = {NULL, NULL};
+    @autoreleasepool {
+        EKEventStore* store = get_store();
+        SEL sel = NSSelectorFromString(@"eventNotifications");
+        if (![store respondsToSelector:sel]) {
+            res.result = strdup("[]");
+            return res;
+        }
+        id notifications = nil;
+        @try {
+            notifications = ((id(*)(id, SEL))objc_msgSend)(store, sel);
+        } @catch (NSException* ex) {
+            res.result = strdup("[]");
+            return res;
+        }
+        NSMutableArray* out = [NSMutableArray array];
+        if ([notifications isKindOfClass:[NSArray class]]) {
+            for (id n in notifications) {
+                NSMutableDictionary* d = [NSMutableDictionary dictionary];
+                @try {
+                    id title = [n valueForKey:@"title"];
+                    d[@"title"] = [title isKindOfClass:[NSString class]] ? title : @"";
+                } @catch (NSException* ex) { d[@"title"] = @""; }
+                @try {
+                    id sd = [n valueForKey:@"startDate"];
+                    if ([sd isKindOfClass:[NSDate class]]) d[@"startDate"] = format_date(sd);
+                } @catch (NSException* ex) {}
+                @try {
+                    id ed = [n valueForKey:@"endDate"];
+                    if ([ed isKindOfClass:[NSDate class]]) d[@"endDate"] = format_date(ed);
+                } @catch (NSException* ex) {}
+                @try {
+                    id loc = [n valueForKey:@"location"];
+                    d[@"location"] = [loc isKindOfClass:[NSString class]] ? loc : [NSNull null];
+                } @catch (NSException* ex) { d[@"location"] = [NSNull null]; }
+                @try {
+                    id by = [n valueForKey:@"invitedBy"];
+                    d[@"organizer"] = [by isKindOfClass:[NSString class]] ? by : [NSNull null];
+                } @catch (NSException* ex) { d[@"organizer"] = [NSNull null]; }
+                @try {
+                    SEL stSel = NSSelectorFromString(@"participationStatus");
+                    if ([n respondsToSelector:stSel])
+                        d[@"status"] = @(((NSInteger(*)(id, SEL))objc_msgSend)(n, stSel));
+                } @catch (NSException* ex) {}
+                @try {
+                    SEL adSel = NSSelectorFromString(@"isAllDay");
+                    if ([n respondsToSelector:adSel])
+                        d[@"allDay"] = ((BOOL(*)(id, SEL))objc_msgSend)(n, adSel) ? @YES : @NO;
+                } @catch (NSException* ex) {}
+                [out addObject:d];
+            }
+        }
+        res.result = to_json(out);
+        if (!res.result) res.error = strdup("JSON serialization failed");
+    }
     return res;
 }

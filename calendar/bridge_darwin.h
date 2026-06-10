@@ -68,6 +68,28 @@ void ek_cal_free(char* ptr);
 // Apple removed them (early-warning canary; reads then rely on Go fallback).
 int ek_cal_conference_selectors_available(void);
 
+// Capability canaries for the private scheduling APIs. Each returns 1 if the
+// underlying private selectors/classes exist on this macOS, 0 otherwise.
+int ek_cal_attendee_selectors_available(void);
+int ek_cal_rsvp_selectors_available(void);
+int ek_cal_availability_selectors_available(void);
+int ek_cal_notifications_selectors_available(void);
+
+// ek_cal_respond_to_event sets the current user's RSVP status on an event.
+// status uses EKParticipantStatus values (2=accepted, 3=declined, 4=tentative).
+// Returns "ok" on success. Caller must free result.
+ek_result_t ek_cal_respond_to_event(const char* event_id, int status);
+
+// ek_cal_request_availability returns free/busy spans for a JSON array of
+// addresses between start_date and end_date (ISO 8601). Result is a JSON object
+// mapping each address to an array of {startDate,endDate,type} spans.
+// Caller must free result.
+ek_result_t ek_cal_request_availability(const char* start_date, const char* end_date, const char* json_addresses);
+
+// ek_cal_event_notifications returns pending event invitations as a JSON array.
+// Caller must free result.
+ek_result_t ek_cal_event_notifications(void);
+
 // ek_cal_watch_start registers EKEventStoreChangedNotification observer and
 // creates a pipe. Returns 1 on success, 0 on failure.
 int ek_cal_watch_start(void);
