@@ -148,6 +148,18 @@ type List struct {
 	Count int `json:"count"`
 	// ReadOnly is true if the list cannot be modified.
 	ReadOnly bool `json:"readOnly"`
+	// IsShared is true if the list is shared with other participants.
+	//
+	// Public EventKit does not expose sharing for reminder lists; this and
+	// the two fields below are read from the private ReminderKit backing
+	// object. When that API is unavailable the fields report the defaults
+	// for an unshared list (false, false, true).
+	IsShared bool `json:"isShared"`
+	// SharedToMe is true if the list is shared with the current user by
+	// someone else (as opposed to a list the user shares with others).
+	SharedToMe bool `json:"sharedToMe"`
+	// IsOwnedByMe is true if the current user owns the list.
+	IsOwnedByMe bool `json:"isOwnedByMe"`
 }
 
 // Alarm represents a reminder notification alert.

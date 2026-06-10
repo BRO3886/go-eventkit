@@ -109,12 +109,15 @@ func simulateListsResponse(lists []List) string {
 	raw := make([]rawList, len(lists))
 	for i, l := range lists {
 		raw[i] = rawList{
-			ID:       l.ID,
-			Title:    l.Title,
-			Color:    l.Color,
-			Source:   l.Source,
-			Count:    l.Count,
-			ReadOnly: l.ReadOnly,
+			ID:          l.ID,
+			Title:       l.Title,
+			Color:       l.Color,
+			Source:      l.Source,
+			Count:       l.Count,
+			ReadOnly:    l.ReadOnly,
+			IsShared:    l.IsShared,
+			SharedToMe:  l.SharedToMe,
+			IsOwnedByMe: l.IsOwnedByMe,
 		}
 	}
 	data, _ := json.Marshal(raw)
@@ -128,7 +131,8 @@ func TestMockListsRoundtrip(t *testing.T) {
 		{ID: "list-1", Title: "Inbox", Color: "#FF0000", Source: "iCloud", Count: 42, ReadOnly: false},
 		{ID: "list-2", Title: "Shopping", Color: "#00FF00", Source: "iCloud", Count: 7, ReadOnly: false},
 		{ID: "list-3", Title: "Work", Color: "#0000FF", Source: "Exchange", Count: 15, ReadOnly: false},
-		{ID: "list-4", Title: "Shared", Color: "#FFFF00", Source: "iCloud", Count: 3, ReadOnly: true},
+		{ID: "list-4", Title: "Shared", Color: "#FFFF00", Source: "iCloud", Count: 3, ReadOnly: true, IsShared: true, SharedToMe: true, IsOwnedByMe: false},
+		{ID: "list-5", Title: "Mine Shared", Color: "#FF00FF", Source: "iCloud", Count: 1, IsShared: true, IsOwnedByMe: true},
 	}
 
 	jsonStr := simulateListsResponse(input)
@@ -159,6 +163,15 @@ func TestMockListsRoundtrip(t *testing.T) {
 		}
 		if l.ReadOnly != input[i].ReadOnly {
 			t.Errorf("list[%d].ReadOnly = %v, want %v", i, l.ReadOnly, input[i].ReadOnly)
+		}
+		if l.IsShared != input[i].IsShared {
+			t.Errorf("list[%d].IsShared = %v, want %v", i, l.IsShared, input[i].IsShared)
+		}
+		if l.SharedToMe != input[i].SharedToMe {
+			t.Errorf("list[%d].SharedToMe = %v, want %v", i, l.SharedToMe, input[i].SharedToMe)
+		}
+		if l.IsOwnedByMe != input[i].IsOwnedByMe {
+			t.Errorf("list[%d].IsOwnedByMe = %v, want %v", i, l.IsOwnedByMe, input[i].IsOwnedByMe)
 		}
 	}
 }
