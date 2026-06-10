@@ -669,6 +669,25 @@ func main() {
 		}
 	}
 
+	// --- Test 27b: Move reminder to another list (ReminderKit reparent) ---
+	if listTestReminderID != "" {
+		moved, err := client.UpdateReminder(listTestReminderID, reminders.UpdateReminderInput{
+			ListName: &defaultList,
+		})
+		check("Move reminder to another list", err)
+		if err == nil {
+			if moved.List != defaultList {
+				log.Printf("  FAIL: Reminder list not updated: got %q, want %q", moved.List, defaultList)
+				failed++
+			} else if moved.ID != listTestReminderID {
+				log.Printf("  FAIL: Reminder ID changed on move: got %s, want %s", truncateID(moved.ID), truncateID(listTestReminderID))
+				failed++
+			} else {
+				log.Printf("  Moved reminder to %q, ID stable", moved.List)
+			}
+		}
+	}
+
 	// --- Test 28: Delete reminder in new list before deleting list ---
 	if listTestReminderID != "" {
 		err := client.DeleteReminder(listTestReminderID)

@@ -166,6 +166,22 @@ static id rem_reminder_from_ek(EKReminder* r) {
     return remObj;
 }
 
+// Extract REMList from an EKCalendar via backingObject._remObject.
+// Returns nil if the private class layout has changed.
+static id rem_list_from_ek_calendar(EKCalendar* cal) {
+    if (!cal) return nil;
+    SEL boSel = NSSelectorFromString(@"backingObject");
+    if (![cal respondsToSelector:boSel]) return nil;
+    id bo = ((id(*)(id,SEL))objc_msgSend)(cal, boSel);
+    if (!bo) return nil;
+    Ivar ri = find_ivar([bo class], "_remObject");
+    if (!ri) return nil;
+    id remObj = object_getIvar(bo, ri);
+    Class remListClass = objc_getClass("REMList");
+    if (!remListClass || ![remObj isKindOfClass:remListClass]) return nil;
+    return remObj;
+}
+
 // Read the flagged state from a REMReminder. Returns NO if the property is
 // not exposed on this macOS or any guard fails.
 //
@@ -418,6 +434,87 @@ static BOOL write_flagged(EKReminder* ekReminder, BOOL flagged) {
     // The REMSaveRequest writes through to ReminderKit but does not update
     // EventKit's in-process cache. Force a refresh so subsequent reads via
     // EKReminder._remObject see the new flagged state.
+    EKEventStore* store = get_store();
+    if ([store respondsToSelector:@selector(refreshSourcesIfNecessary)]) {
+        [store refreshSourcesIfNecessary];
+    }
+    return YES;
+}
+
+// Move a reminder to another list via the private ReminderKit save path.
+//
+// Public EventKit has no move API: the only public mechanism is reassigning
+// EKCalendarItem.calendar and saving, which EventKit rejects with reminderkit
+// error -3002 whenever a shared/collaborative list is on either end (a shared
+// list behaves like its own source). ReminderKit itself supports the move —
+// REMAccountCapabilities exposes supportsMoveAcrossSharedLists, and
+// AppleScript's `move` succeeds between shared lists — so drive it directly:
+// reparent by writing the target list's REMObjectID to the change item's
+// listID. The save pipeline handles ordering and sharing, and the reminder
+// keeps its identifier.
+//
+// Returns YES on success. On failure (private API unavailable, save errored),
+// returns NO — caller should fall back to EKCalendarItem.calendar reassignment.
+static BOOL move_reminder_via_reminderkit(EKReminder* ekReminder, EKCalendar* targetCal) {
+    if (!load_reminderkit()) return NO;
+    id remReminder = rem_reminder_from_ek(ekReminder);
+    if (!remReminder) return NO;
+    id remList = rem_list_from_ek_calendar(targetCal);
+    if (!remList) return NO;
+
+    id targetListID = nil;
+    @try {
+        targetListID = [remList valueForKey:@"objectID"];
+    } @catch (NSException* e) {
+        return NO;
+    }
+    Class objectIDClass = objc_getClass("REMObjectID");
+    if (!targetListID || !objectIDClass || ![targetListID isKindOfClass:objectIDClass]) return NO;
+
+    // Get REMStore — via ivar _store first, then -store method as fallback.
+    id remStore = nil;
+    Ivar storeIvar = find_ivar([remReminder class], "_store");
+    if (storeIvar) remStore = object_getIvar(remReminder, storeIvar);
+    if (!remStore) {
+        SEL storeSel = NSSelectorFromString(@"store");
+        if ([remReminder respondsToSelector:storeSel]) {
+            remStore = ((id(*)(id,SEL))objc_msgSend)(remReminder, storeSel);
+        }
+    }
+    Class remStoreClass = objc_getClass("REMStore");
+    if (!remStore || !remStoreClass || ![remStore isKindOfClass:remStoreClass]) return NO;
+
+    Class saveReqClass = objc_getClass("REMSaveRequest");
+    if (!saveReqClass) return NO;
+    id saveReq = [saveReqClass alloc];
+    SEL initSel = NSSelectorFromString(@"initWithStore:");
+    if (![saveReq respondsToSelector:initSel]) return NO;
+    saveReq = ((id(*)(id,SEL,id))objc_msgSend)(saveReq, initSel, remStore);
+    if (!saveReq) return NO;
+
+    SEL updateSel = NSSelectorFromString(@"updateReminder:");
+    if (![saveReq respondsToSelector:updateSel]) return NO;
+    id changeItem = ((id(*)(id,SEL,id))objc_msgSend)(saveReq, updateSel, remReminder);
+    if (!changeItem) return NO;
+
+    // listID is a dynamic property on the change item (setListID: is not
+    // registered with the runtime), so write via KVC, which routes through
+    // the dynamic dispatch.
+    @try {
+        [changeItem setValue:targetListID forKey:@"listID"];
+    } @catch (NSException* e) {
+        return NO;
+    }
+
+    SEL saveSel = NSSelectorFromString(@"saveSynchronouslyWithError:");
+    if (![saveReq respondsToSelector:saveSel]) return NO;
+    NSError* err = nil;
+    BOOL saved = ((BOOL(*)(id,SEL,NSError**))objc_msgSend)(saveReq, saveSel, &err);
+    if (!saved) return NO;
+
+    // The REMSaveRequest writes through to ReminderKit but does not update
+    // EventKit's in-process cache. Force a refresh so subsequent reads see
+    // the reminder in its new list.
     EKEventStore* store = get_store();
     if ([store respondsToSelector:@selector(refreshSourcesIfNecessary)]) {
         [store refreshSourcesIfNecessary];
@@ -1207,7 +1304,11 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
                 }
             }
 
-            // Move to different list.
+            // Move to different list. Resolved here, applied after the field
+            // save below: the move goes through ReminderKit, which operates
+            // on the persisted state, so unsaved EventKit field edits must
+            // land first.
+            EKCalendar* moveTarget = nil;
             if (input[@"listName"] && input[@"listName"] != [NSNull null]) {
                 NSString* listName = input[@"listName"];
                 EKCalendar* cal = find_list_by_name(store, listName);
@@ -1215,7 +1316,9 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
                     res.error = strdup([[NSString stringWithFormat:@"list not found: %@ (available: %@)", listName, available_list_names(store)] UTF8String]);
                     return;
                 }
-                reminder.calendar = cal;
+                if (![cal.calendarIdentifier isEqualToString:reminder.calendar.calendarIdentifier]) {
+                    moveTarget = cal;
+                }
             }
 
             // Save via EventKit.
@@ -1225,6 +1328,26 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
                 res.error = strdup([[NSString stringWithFormat:@"failed to update reminder: %@",
                     saveError.localizedDescription] UTF8String]);
                 return;
+            }
+
+            // Apply the list move via ReminderKit (handles shared lists,
+            // keeps the identifier). Falls back to the public
+            // EKCalendarItem.calendar reassignment if the private API is
+            // unavailable — that path fails with -3002 across a shared-list
+            // boundary, which was the only behavior before this bridge.
+            if (moveTarget) {
+                if (move_reminder_via_reminderkit(reminder, moveTarget)) {
+                    EKReminder* fresh = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
+                    if (fresh) reminder = fresh;
+                } else {
+                    reminder.calendar = moveTarget;
+                    NSError* moveError = nil;
+                    if (![store saveReminder:reminder commit:YES error:&moveError]) {
+                        res.error = strdup([[NSString stringWithFormat:@"failed to move reminder to list: %@",
+                            moveError.localizedDescription] UTF8String]);
+                        return;
+                    }
+                }
             }
 
             // URL attachment via private ReminderKit API (see create path).
