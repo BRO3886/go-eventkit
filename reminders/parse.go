@@ -32,8 +32,19 @@ type rawReminder struct {
 }
 
 type rawAlarm struct {
-	AbsoluteDate   *string `json:"absoluteDate"`
-	RelativeOffset float64 `json:"relativeOffset"`
+	AbsoluteDate   *string           `json:"absoluteDate"`
+	RelativeOffset float64           `json:"relativeOffset"`
+	Location       *rawAlarmLocation `json:"location,omitempty"`
+	Proximity      string            `json:"proximity,omitempty"`
+}
+
+// rawAlarmLocation uses *float64 coordinates to distinguish "not set" from
+// zero (Null Island at 0,0 is a valid coordinate).
+type rawAlarmLocation struct {
+	Title     string   `json:"title"`
+	Latitude  *float64 `json:"latitude,omitempty"`
+	Longitude *float64 `json:"longitude,omitempty"`
+	Radius    *float64 `json:"radius,omitempty"`
 }
 
 type rawRecurrenceRule struct {
@@ -170,10 +181,25 @@ func convertRawReminder(r *rawReminder) Reminder {
 	if len(r.Alarms) > 0 {
 		rem.Alarms = make([]Alarm, len(r.Alarms))
 		for i, a := range r.Alarms {
-			rem.Alarms[i] = Alarm{
+			alarm := Alarm{
 				AbsoluteDate:   parseOptionalTime(a.AbsoluteDate),
 				RelativeOffset: time.Duration(a.RelativeOffset) * time.Second,
+				Proximity:      AlarmProximity(a.Proximity),
 			}
+			if a.Location != nil {
+				loc := &eventkit.StructuredLocation{Title: a.Location.Title}
+				if a.Location.Latitude != nil {
+					loc.Latitude = *a.Location.Latitude
+				}
+				if a.Location.Longitude != nil {
+					loc.Longitude = *a.Location.Longitude
+				}
+				if a.Location.Radius != nil {
+					loc.Radius = *a.Location.Radius
+				}
+				alarm.Location = loc
+			}
+			rem.Alarms[i] = alarm
 		}
 	} else {
 		rem.Alarms = []Alarm{}
@@ -297,17 +323,7 @@ func marshalCreateInput(input CreateReminderInput) (string, error) {
 	}
 
 	if len(input.Alarms) > 0 {
-		alarms := make([]map[string]any, len(input.Alarms))
-		for i, a := range input.Alarms {
-			alarm := map[string]any{}
-			if a.AbsoluteDate != nil {
-				alarm["absoluteDate"] = a.AbsoluteDate.UTC().Format("2006-01-02T15:04:05.000Z")
-			} else {
-				alarm["relativeOffset"] = a.RelativeOffset.Seconds()
-			}
-			alarms[i] = alarm
-		}
-		m["alarms"] = alarms
+		m["alarms"] = marshalAlarms(input.Alarms)
 	}
 
 	if len(input.RecurrenceRules) > 0 {
@@ -319,6 +335,37 @@ func marshalCreateInput(input CreateReminderInput) (string, error) {
 		return "", fmt.Errorf("reminders: failed to marshal create input: %w", err)
 	}
 	return string(data), nil
+}
+
+// marshalAlarms converts alarms to JSON-serializable format. Alarms without
+// an absolute date always serialize relativeOffset, even at zero — the bridge
+// relies on the key's presence (a zero-offset alarm is "at time of event").
+func marshalAlarms(alarms []Alarm) []map[string]any {
+	result := make([]map[string]any, len(alarms))
+	for i, a := range alarms {
+		alarm := map[string]any{}
+		if a.AbsoluteDate != nil {
+			alarm["absoluteDate"] = a.AbsoluteDate.UTC().Format("2006-01-02T15:04:05.000Z")
+		} else {
+			alarm["relativeOffset"] = a.RelativeOffset.Seconds()
+		}
+		if a.Location != nil {
+			loc := map[string]any{
+				"title":     a.Location.Title,
+				"latitude":  a.Location.Latitude,
+				"longitude": a.Location.Longitude,
+			}
+			if a.Location.Radius > 0 {
+				loc["radius"] = a.Location.Radius
+			}
+			alarm["location"] = loc
+			if a.Proximity != ProximityNone {
+				alarm["proximity"] = string(a.Proximity)
+			}
+		}
+		result[i] = alarm
+	}
+	return result
 }
 
 // marshalUpdateInput converts UpdateReminderInput to JSON for the bridge.
@@ -362,17 +409,7 @@ func marshalUpdateInput(input UpdateReminderInput) (string, error) {
 	}
 
 	if input.Alarms != nil {
-		alarms := make([]map[string]any, len(*input.Alarms))
-		for i, a := range *input.Alarms {
-			alarm := map[string]any{}
-			if a.AbsoluteDate != nil {
-				alarm["absoluteDate"] = a.AbsoluteDate.UTC().Format("2006-01-02T15:04:05.000Z")
-			} else {
-				alarm["relativeOffset"] = a.RelativeOffset.Seconds()
-			}
-			alarms[i] = alarm
-		}
-		m["alarms"] = alarms
+		m["alarms"] = marshalAlarms(*input.Alarms)
 	}
 
 	if input.RecurrenceRules != nil {

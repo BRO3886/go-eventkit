@@ -1,6 +1,7 @@
 #import <EventKit/EventKit.h>
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
+#import <CoreLocation/CoreLocation.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 #include "bridge_darwin.h"
@@ -105,6 +106,53 @@ static NSDate* parse_iso_date(const char* str) {
 static NSString* format_date(NSDate* date) {
     if (!date) return nil;
     return [get_iso_formatter() stringFromDate:date];
+}
+
+// rem_alarm_from_input builds an EKAlarm from a bridge alarm dict.
+// Trigger kinds: absoluteDate, relativeOffset (presence of the key matters —
+// zero means "at time of event"), and location + proximity (geofence).
+// Returns nil if the dict describes no usable trigger.
+static EKAlarm* rem_alarm_from_input(NSDictionary* alarmInput) {
+    EKAlarm* alarm = nil;
+    if (alarmInput[@"absoluteDate"] && alarmInput[@"absoluteDate"] != [NSNull null]) {
+        NSDate* absDate = parse_iso_date([alarmInput[@"absoluteDate"] UTF8String]);
+        if (absDate) {
+            alarm = [EKAlarm alarmWithAbsoluteDate:absDate];
+        }
+    } else if (alarmInput[@"relativeOffset"] && alarmInput[@"relativeOffset"] != (id)[NSNull null]) {
+        double offset = [alarmInput[@"relativeOffset"] doubleValue];
+        alarm = [EKAlarm alarmWithRelativeOffset:offset];
+    }
+
+    NSDictionary* locInput = alarmInput[@"location"];
+    if (locInput && locInput != (id)[NSNull null]) {
+        if (!alarm) {
+            alarm = [[EKAlarm alloc] init];
+        }
+        NSString* locTitle = locInput[@"title"] ?: @"";
+        EKStructuredLocation* loc = [EKStructuredLocation locationWithTitle:locTitle];
+        NSNumber* lat = locInput[@"latitude"];
+        NSNumber* lng = locInput[@"longitude"];
+        if (lat && lat != (id)[NSNull null] && lng && lng != (id)[NSNull null]) {
+            loc.geoLocation = [[CLLocation alloc] initWithLatitude:[lat doubleValue]
+                                                         longitude:[lng doubleValue]];
+        }
+        NSNumber* radius = locInput[@"radius"];
+        if (radius && radius != (id)[NSNull null]) {
+            loc.radius = [radius doubleValue];
+        }
+        alarm.structuredLocation = loc;
+        NSString* prox = alarmInput[@"proximity"];
+        if ([prox isKindOfClass:[NSString class]]) {
+            if ([prox isEqualToString:@"enter"]) {
+                alarm.proximity = EKAlarmProximityEnter;
+            } else if ([prox isEqualToString:@"leave"]) {
+                alarm.proximity = EKAlarmProximityLeave;
+            }
+        }
+    }
+
+    return alarm;
 }
 
 // --- JSON serialization ---
@@ -670,6 +718,24 @@ static NSDictionary* reminder_to_dict(EKReminder* r) {
                 d[@"remindMeDate"] = format_date(alarm.absoluteDate);
             }
             a[@"relativeOffset"] = @(alarm.relativeOffset);
+            if (alarm.structuredLocation) {
+                EKStructuredLocation* loc = alarm.structuredLocation;
+                NSMutableDictionary* locDict = [NSMutableDictionary dictionary];
+                locDict[@"title"] = loc.title ?: @"";
+                if (loc.geoLocation) {
+                    locDict[@"latitude"] = @(loc.geoLocation.coordinate.latitude);
+                    locDict[@"longitude"] = @(loc.geoLocation.coordinate.longitude);
+                }
+                if (loc.radius > 0) {
+                    locDict[@"radius"] = @(loc.radius);
+                }
+                a[@"location"] = locDict;
+            }
+            if (alarm.proximity == EKAlarmProximityEnter) {
+                a[@"proximity"] = @"enter";
+            } else if (alarm.proximity == EKAlarmProximityLeave) {
+                a[@"proximity"] = @"leave";
+            }
             [alarms addObject:a];
         }
         d[@"alarms"] = alarms;
@@ -1053,14 +1119,9 @@ ek_result_t ek_rem_create_reminder(const char* json_input) {
             if (input[@"alarms"] && input[@"alarms"] != [NSNull null]) {
                 NSArray* alarmInputs = input[@"alarms"];
                 for (NSDictionary* alarmInput in alarmInputs) {
-                    if (alarmInput[@"absoluteDate"] && alarmInput[@"absoluteDate"] != [NSNull null]) {
-                        NSDate* absDate = parse_iso_date([alarmInput[@"absoluteDate"] UTF8String]);
-                        if (absDate) {
-                            [reminder addAlarm:[EKAlarm alarmWithAbsoluteDate:absDate]];
-                        }
-                    } else if (alarmInput[@"relativeOffset"]) {
-                        double offset = [alarmInput[@"relativeOffset"] doubleValue];
-                        [reminder addAlarm:[EKAlarm alarmWithRelativeOffset:offset]];
+                    EKAlarm* alarm = rem_alarm_from_input(alarmInput);
+                    if (alarm) {
+                        [reminder addAlarm:alarm];
                     }
                 }
             }
@@ -1268,14 +1329,9 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
                 if (input[@"alarms"] != [NSNull null]) {
                     NSArray* alarmInputs = input[@"alarms"];
                     for (NSDictionary* alarmInput in alarmInputs) {
-                        if (alarmInput[@"absoluteDate"] && alarmInput[@"absoluteDate"] != [NSNull null]) {
-                            NSDate* absDate = parse_iso_date([alarmInput[@"absoluteDate"] UTF8String]);
-                            if (absDate) {
-                                [reminder addAlarm:[EKAlarm alarmWithAbsoluteDate:absDate]];
-                            }
-                        } else if (alarmInput[@"relativeOffset"]) {
-                            double offset = [alarmInput[@"relativeOffset"] doubleValue];
-                            [reminder addAlarm:[EKAlarm alarmWithRelativeOffset:offset]];
+                        EKAlarm* alarm = rem_alarm_from_input(alarmInput);
+                        if (alarm) {
+                            [reminder addAlarm:alarm];
                         }
                     }
                 }

@@ -164,8 +164,9 @@ type List struct {
 
 // Alarm represents a reminder notification alert.
 //
-// An alarm is either absolute (fires at a specific time) or relative
-// (fires a duration before the due date). Set one or the other, not both.
+// An alarm is either absolute (fires at a specific time), relative
+// (fires a duration before the due date), or location-based (fires on
+// arriving at or leaving a geofence). Set one trigger kind per alarm.
 type Alarm struct {
 	// AbsoluteDate fires the alarm at this exact time. Nil for relative alarms.
 	AbsoluteDate *time.Time `json:"absoluteDate,omitempty"`
@@ -173,7 +174,30 @@ type Alarm struct {
 	// Negative values mean before the due date (e.g., -30*time.Minute).
 	// Zero for absolute alarms.
 	RelativeOffset time.Duration `json:"relativeOffset,omitempty"`
+	// Location attaches a geofence trigger to the alarm
+	// (EKAlarm.structuredLocation). Set Proximity to control whether the
+	// alarm fires on arrival or departure.
+	//
+	// Location alarms require Location Services permission in addition to
+	// Reminders access; without it the alarm saves but never fires.
+	Location *eventkit.StructuredLocation `json:"location,omitempty"`
+	// Proximity selects whether a location alarm fires on entering or
+	// leaving the geofence. Ignored unless Location is set.
+	Proximity AlarmProximity `json:"proximity,omitempty"`
 }
+
+// AlarmProximity controls when a location-based alarm fires relative to its
+// geofence. Corresponds to EKAlarmProximity.
+type AlarmProximity string
+
+const (
+	// ProximityNone means the alarm has no geofence trigger.
+	ProximityNone AlarmProximity = ""
+	// ProximityEnter fires the alarm when arriving at the location.
+	ProximityEnter AlarmProximity = "enter"
+	// ProximityLeave fires the alarm when leaving the location.
+	ProximityLeave AlarmProximity = "leave"
+)
 
 // Priority represents the priority level of a reminder.
 //
