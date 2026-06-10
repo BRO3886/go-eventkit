@@ -116,6 +116,12 @@ type Event struct {
 	Notes string `json:"notes"`
 	// URL is an optional URL associated with the event (e.g., a meeting link).
 	URL string `json:"url"`
+	// ConferenceURL is the video-conference join link for this event, if any —
+	// the same link Calendar.app shows as its "Join" button. It is read from a
+	// private EventKit accessor when available; otherwise it is detected from
+	// the event's URL, location, and notes via [DetectConferenceURL]. Empty
+	// when the event has no recognizable conference link. Read-only.
+	ConferenceURL string `json:"conferenceURL,omitempty"`
 	// Calendar is the display name of the calendar this event belongs to.
 	Calendar string `json:"calendar"`
 	// CalendarID is the identifier of the calendar this event belongs to.

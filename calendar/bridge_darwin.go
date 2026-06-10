@@ -24,6 +24,13 @@ import (
 var calWatchMu sync.Mutex
 var calWatchActive bool
 
+// conferenceSelectorsAvailable reports whether the private EKEvent conference
+// URL accessors exist on this macOS. Used as a CI canary so a future macOS
+// removing the private API fails a test instead of silently degrading.
+func conferenceSelectorsAvailable() bool {
+	return C.ek_cal_conference_selectors_available() == 1
+}
+
 func resultErr(res C.ek_result_t) error {
 	if res.error != nil {
 		msg := C.GoString(res.error)

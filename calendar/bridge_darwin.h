@@ -63,6 +63,11 @@ ek_result_t ek_cal_delete_events(const char* json_ids, int span);
 // ek_cal_free frees a string returned by the above functions.
 void ek_cal_free(char* ptr);
 
+// ek_cal_conference_selectors_available reports whether the private EKEvent
+// conference URL accessors exist on this macOS. Returns 1 if available, 0 if
+// Apple removed them (early-warning canary; reads then rely on Go fallback).
+int ek_cal_conference_selectors_available(void);
+
 // ek_cal_watch_start registers EKEventStoreChangedNotification observer and
 // creates a pipe. Returns 1 on success, 0 on failure.
 int ek_cal_watch_start(void);
