@@ -441,6 +441,24 @@ static BOOL write_flagged(EKReminder* ekReminder, BOOL flagged) {
     return YES;
 }
 
+// Whether a list is shared/collaborative, read from the backing REMList.
+// Returns NO when the private API is unavailable — callers then take the
+// public move path, which is correct for every non-shared list.
+static BOOL list_is_shared(EKCalendar* cal) {
+    if (!load_reminderkit()) return NO;
+    id remList = rem_list_from_ek_calendar(cal);
+    if (!remList) return NO;
+    @try {
+        id v = [remList valueForKey:@"isShared"];
+        if ([v isKindOfClass:[NSNumber class]]) {
+            return [(NSNumber*)v boolValue];
+        }
+    } @catch (NSException* e) {
+        // Property not present on this macOS — fall through to NO.
+    }
+    return NO;
+}
+
 // Move a reminder to another list via the private ReminderKit save path.
 //
 // Public EventKit has no move API: the only public mechanism is reassigning
@@ -452,6 +470,9 @@ static BOOL write_flagged(EKReminder* ekReminder, BOOL flagged) {
 // reparent by writing the target list's REMObjectID to the change item's
 // listID. The save pipeline handles ordering and sharing, and the reminder
 // keeps its identifier.
+//
+// Only used when a shared list is on either end of the move (or as a rescue
+// when the public save is rejected); plain moves stay on public EventKit.
 //
 // Returns YES on success. On failure (private API unavailable, save errored),
 // returns NO — caller should fall back to EKCalendarItem.calendar reassignment.
@@ -1330,24 +1351,35 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
                 return;
             }
 
-            // Apply the list move via ReminderKit (handles shared lists,
-            // keeps the identifier). Falls back to the public
-            // EKCalendarItem.calendar reassignment if the private API is
-            // unavailable — that path fails with -3002 across a shared-list
-            // boundary, which was the only behavior before this bridge.
+            // Apply the list move. Public EventKit (calendar reassignment)
+            // is the default; the private ReminderKit reparent is used only
+            // when a shared list is on either end — the public save is
+            // rejected with -3002 across that boundary — or as a rescue when
+            // the public save unexpectedly fails.
             if (moveTarget) {
-                if (move_reminder_via_reminderkit(reminder, moveTarget)) {
-                    EKReminder* fresh = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
-                    if (fresh) reminder = fresh;
-                } else {
+                BOOL crossesSharing = list_is_shared(reminder.calendar) || list_is_shared(moveTarget);
+                BOOL moved = crossesSharing && move_reminder_via_reminderkit(reminder, moveTarget);
+                if (!moved) {
                     reminder.calendar = moveTarget;
                     NSError* moveError = nil;
-                    if (![store saveReminder:reminder commit:YES error:&moveError]) {
-                        res.error = strdup([[NSString stringWithFormat:@"failed to move reminder to list: %@",
-                            moveError.localizedDescription] UTF8String]);
-                        return;
+                    moved = [store saveReminder:reminder commit:YES error:&moveError];
+                    if (!moved) {
+                        // Undo the dirty in-memory reassignment so the rescue
+                        // reparent (and any later save) starts from the
+                        // committed state.
+                        if ([reminder respondsToSelector:@selector(rollback)]) {
+                            [(id)reminder rollback];
+                        }
+                        moved = move_reminder_via_reminderkit(reminder, moveTarget);
+                        if (!moved) {
+                            res.error = strdup([[NSString stringWithFormat:@"failed to move reminder to list: %@",
+                                moveError.localizedDescription] UTF8String]);
+                            return;
+                        }
                     }
                 }
+                EKReminder* fresh = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
+                if (fresh) reminder = fresh;
             }
 
             // URL attachment via private ReminderKit API (see create path).
