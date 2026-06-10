@@ -71,6 +71,11 @@ var (
 	// [Client.DeleteCalendar] when the target calendar is immutable
 	// (e.g., subscribed or birthday calendars).
 	ErrImmutable = errors.New("calendar: calendar is immutable")
+
+	// ErrUnsupportedFeature is returned by scheduling methods (attendee
+	// writes, RSVP, availability) when the private EventKit API they rely on
+	// is not present on the running macOS version.
+	ErrUnsupportedFeature = errors.New("calendar: feature not supported on this macOS")
 )
 
 // Client provides access to macOS Calendar via EventKit.
@@ -122,6 +127,13 @@ type Event struct {
 	// the event's URL, location, and notes via [DetectConferenceURL]. Empty
 	// when the event has no recognizable conference link. Read-only.
 	ConferenceURL string `json:"conferenceURL,omitempty"`
+	// TravelTime is the travel time configured before the event. Zero when
+	// none is set. Read via a private EventKit accessor; zero if unavailable.
+	TravelTime time.Duration `json:"travelTime,omitempty"`
+	// SelfStatus is the current user's RSVP status for this event when it is an
+	// invitation (see [ParticipantStatus]). [ParticipantStatusUnknown] for
+	// events the user owns or that carry no invitation.
+	SelfStatus ParticipantStatus `json:"selfStatus,omitempty"`
 	// Calendar is the display name of the calendar this event belongs to.
 	Calendar string `json:"calendar"`
 	// CalendarID is the identifier of the calendar this event belongs to.
@@ -404,6 +416,24 @@ type CreateEventInput struct {
 	// If set, this takes precedence over Location for map integrations.
 	// The plain Location string is set independently.
 	StructuredLocation *eventkit.StructuredLocation `json:"structuredLocation,omitempty"`
+	// Attendees invites participants to the event. This uses a private
+	// EventKit API (the public API is read-only); when an attendee is added on
+	// a server-backed calendar (iCloud, Exchange, Google), saving the event
+	// sends an invitation email. [Client.CreateEvent] returns an error if the
+	// private API is unavailable on this macOS. Use [Client.AttendeeWritesSupported]
+	// to check first.
+	Attendees []AttendeeInput `json:"attendees,omitempty"`
+	// TravelTime sets travel time before the event. Uses a private EventKit
+	// accessor; ignored if unavailable.
+	TravelTime time.Duration `json:"travelTime,omitempty"`
+}
+
+// AttendeeInput describes a participant to invite to an event.
+type AttendeeInput struct {
+	// Email is the attendee's email address (required).
+	Email string `json:"email"`
+	// Name is the attendee's display name. Defaults to Email if empty.
+	Name string `json:"name,omitempty"`
 }
 
 // UpdateEventInput contains fields for updating an existing event via
@@ -431,6 +461,58 @@ type UpdateEventInput struct {
 	// StructuredLocation updates the geographic location. Set to non-nil to
 	// update, leave nil to keep unchanged.
 	StructuredLocation *eventkit.StructuredLocation `json:"structuredLocation,omitempty"`
+	// Attendees adds participants to the event (private API; the public API is
+	// read-only). Adding an attendee on a server-backed calendar sends an
+	// invitation on save. Nil leaves attendees unchanged; this cannot remove
+	// existing attendees.
+	Attendees []AttendeeInput `json:"attendees,omitempty"`
+	// TravelTime sets travel time before the event. Nil leaves it unchanged.
+	TravelTime *time.Duration `json:"travelTime,omitempty"`
+}
+
+// AvailabilityType is the free/busy classification of a time span returned by
+// [Client.RequestAvailability].
+type AvailabilityType int
+
+const (
+	AvailabilityTypeFree        AvailabilityType = 0
+	AvailabilityTypeBusy        AvailabilityType = 1
+	AvailabilityTypeTentative   AvailabilityType = 2
+	AvailabilityTypeUnavailable AvailabilityType = 3
+)
+
+// String returns a human-readable representation of the availability type.
+func (a AvailabilityType) String() string {
+	switch a {
+	case AvailabilityTypeFree:
+		return "free"
+	case AvailabilityTypeBusy:
+		return "busy"
+	case AvailabilityTypeTentative:
+		return "tentative"
+	case AvailabilityTypeUnavailable:
+		return "unavailable"
+	default:
+		return "unknown"
+	}
+}
+
+// AvailabilitySpan is a single free/busy period for an address.
+type AvailabilitySpan struct {
+	Start time.Time        `json:"start"`
+	End   time.Time        `json:"end"`
+	Type  AvailabilityType `json:"type"`
+}
+
+// Invitation is a pending event invitation in the user's notification inbox.
+type Invitation struct {
+	Title     string            `json:"title"`
+	Start     time.Time         `json:"start"`
+	End       time.Time         `json:"end"`
+	Location  string            `json:"location,omitempty"`
+	Organizer string            `json:"organizer,omitempty"`
+	Status    ParticipantStatus `json:"status"`
+	AllDay    bool              `json:"allDay"`
 }
 
 // CreateCalendarInput contains the fields for creating a new calendar via

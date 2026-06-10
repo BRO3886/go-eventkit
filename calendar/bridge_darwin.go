@@ -40,6 +40,10 @@ func resultErr(res C.ek_result_t) error {
 	return errors.New("unknown error")
 }
 
+func isNotFound(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "not found")
+}
+
 // New creates a new Calendar [Client] and requests calendar access.
 //
 // On first call, macOS displays a TCC prompt requesting calendar access.

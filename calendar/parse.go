@@ -19,6 +19,8 @@ type rawEvent struct {
 	Notes              *string               `json:"notes"`
 	URL                *string               `json:"url"`
 	ConferenceURL      *string               `json:"conferenceURL"`
+	TravelTime         float64               `json:"travelTime"`
+	SelfStatus         int                   `json:"selfStatus"`
 	Calendar           string                `json:"calendar"`
 	CalendarID         string                `json:"calendarID"`
 	Status             int                   `json:"status"`
@@ -153,6 +155,10 @@ func convertRawEvent(r rawEvent) Event {
 		// Private accessor absent or empty — fall back to pure-Go detection.
 		e.ConferenceURL = DetectConferenceURL(e.URL, e.Location, e.Notes)
 	}
+	if r.TravelTime > 0 {
+		e.TravelTime = time.Duration(r.TravelTime) * time.Second
+	}
+	e.SelfStatus = ParticipantStatus(r.SelfStatus)
 	if r.OccurrenceDate != nil {
 		t := parseISO8601(*r.OccurrenceDate)
 		if !t.IsZero() {
@@ -254,6 +260,74 @@ func parseEventJSON(jsonStr string) (*Event, error) {
 	return &e, nil
 }
 
+type rawAvailabilitySpan struct {
+	StartDate *string `json:"startDate"`
+	EndDate   *string `json:"endDate"`
+	Type      int     `json:"type"`
+}
+
+func parseAvailabilityJSON(jsonStr string) (map[string][]AvailabilitySpan, error) {
+	var raw map[string][]rawAvailabilitySpan
+	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
+		return nil, fmt.Errorf("calendar: failed to parse availability JSON: %w", err)
+	}
+	out := make(map[string][]AvailabilitySpan, len(raw))
+	for addr, spans := range raw {
+		converted := make([]AvailabilitySpan, 0, len(spans))
+		for _, s := range spans {
+			span := AvailabilitySpan{Type: AvailabilityType(s.Type)}
+			if s.StartDate != nil {
+				span.Start = parseISO8601(*s.StartDate)
+			}
+			if s.EndDate != nil {
+				span.End = parseISO8601(*s.EndDate)
+			}
+			converted = append(converted, span)
+		}
+		out[addr] = converted
+	}
+	return out, nil
+}
+
+type rawInvitation struct {
+	Title     string  `json:"title"`
+	StartDate *string `json:"startDate"`
+	EndDate   *string `json:"endDate"`
+	Location  *string `json:"location"`
+	Organizer *string `json:"organizer"`
+	Status    int     `json:"status"`
+	AllDay    bool    `json:"allDay"`
+}
+
+func parseInvitationsJSON(jsonStr string) ([]Invitation, error) {
+	var raw []rawInvitation
+	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
+		return nil, fmt.Errorf("calendar: failed to parse invitations JSON: %w", err)
+	}
+	out := make([]Invitation, len(raw))
+	for i, r := range raw {
+		inv := Invitation{
+			Title:  r.Title,
+			Status: ParticipantStatus(r.Status),
+			AllDay: r.AllDay,
+		}
+		if r.StartDate != nil {
+			inv.Start = parseISO8601(*r.StartDate)
+		}
+		if r.EndDate != nil {
+			inv.End = parseISO8601(*r.EndDate)
+		}
+		if r.Location != nil {
+			inv.Location = *r.Location
+		}
+		if r.Organizer != nil {
+			inv.Organizer = *r.Organizer
+		}
+		out[i] = inv
+	}
+	return out, nil
+}
+
 func parseCalendarsJSON(jsonStr string) ([]Calendar, error) {
 	var raw []rawCalendar
 	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
@@ -290,6 +364,24 @@ type createEventJSON struct {
 	TimeZone              string                  `json:"timeZone,omitempty"`
 	RecurrenceRules       []recurrenceRuleJSON    `json:"recurrenceRules,omitempty"`
 	StructuredLocation    *structuredLocationJSON `json:"structuredLocation,omitempty"`
+	Attendees             []attendeeInputJSON     `json:"attendees,omitempty"`
+	TravelTime            float64                 `json:"travelTime,omitempty"`
+}
+
+type attendeeInputJSON struct {
+	Email string `json:"email"`
+	Name  string `json:"name,omitempty"`
+}
+
+func marshalAttendeeInputs(attendees []AttendeeInput) []attendeeInputJSON {
+	if len(attendees) == 0 {
+		return nil
+	}
+	out := make([]attendeeInputJSON, len(attendees))
+	for i, a := range attendees {
+		out[i] = attendeeInputJSON{Email: a.Email, Name: a.Name}
+	}
+	return out
 }
 
 type alertJSON struct {
@@ -395,6 +487,10 @@ func marshalCreateInput(input CreateEventInput) ([]byte, error) {
 	}
 
 	j.StructuredLocation = marshalStructuredLocation(input.StructuredLocation)
+	j.Attendees = marshalAttendeeInputs(input.Attendees)
+	if input.TravelTime > 0 {
+		j.TravelTime = input.TravelTime.Seconds()
+	}
 
 	return json.Marshal(j)
 }
@@ -469,6 +565,12 @@ func marshalUpdateInput(input UpdateEventInput) ([]byte, error) {
 	}
 	if input.StructuredLocation != nil {
 		m["structuredLocation"] = marshalStructuredLocation(input.StructuredLocation)
+	}
+	if len(input.Attendees) > 0 {
+		m["attendees"] = marshalAttendeeInputs(input.Attendees)
+	}
+	if input.TravelTime != nil {
+		m["travelTime"] = input.TravelTime.Seconds()
 	}
 
 	return json.Marshal(m)
