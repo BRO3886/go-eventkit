@@ -18,6 +18,7 @@ type rawEvent struct {
 	Location           *string               `json:"location"`
 	Notes              *string               `json:"notes"`
 	URL                *string               `json:"url"`
+	ConferenceURL      *string               `json:"conferenceURL"`
 	Calendar           string                `json:"calendar"`
 	CalendarID         string                `json:"calendarID"`
 	Status             int                   `json:"status"`
@@ -145,6 +146,12 @@ func convertRawEvent(r rawEvent) Event {
 	}
 	if r.TimeZone != nil {
 		e.TimeZone = *r.TimeZone
+	}
+	if r.ConferenceURL != nil && *r.ConferenceURL != "" {
+		e.ConferenceURL = *r.ConferenceURL
+	} else {
+		// Private accessor absent or empty — fall back to pure-Go detection.
+		e.ConferenceURL = DetectConferenceURL(e.URL, e.Location, e.Notes)
 	}
 	if r.OccurrenceDate != nil {
 		t := parseISO8601(*r.OccurrenceDate)

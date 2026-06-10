@@ -2,6 +2,7 @@
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #import <CoreLocation/CoreLocation.h>
+#import <objc/message.h>
 #include "bridge_darwin.h"
 #include <stdlib.h>
 #include <string.h>
@@ -120,6 +121,45 @@ static char* to_json(id obj) {
     return strdup([str UTF8String]);
 }
 
+// --- Conference URL (private EventKit API) ---
+//
+// Calendar.app surfaces a "join" link for events whose notes/location/url
+// contain a video-conference link, or whose server payload carries a virtual
+// conference. That value is exposed on EKEvent through private accessors
+// (-conferenceURLForDisplay, -conferenceURL), not through any public API.
+//
+// Reads are guarded by respondsToSelector: and isKindOfClass: so they degrade
+// to nil if Apple removes the accessors in a future macOS release. The Go
+// layer then falls back to its own pure-Go link detection over the public
+// url/location/notes fields.
+
+static NSString* conference_url_for_event(EKEvent* e) {
+    if (!e) return nil;
+    NSArray<NSString*>* selectorNames = @[ @"conferenceURLForDisplay", @"conferenceURL" ];
+    for (NSString* name in selectorNames) {
+        SEL sel = NSSelectorFromString(name);
+        if (![e respondsToSelector:sel]) continue;
+        id v = nil;
+        @try {
+            v = ((id(*)(id, SEL))objc_msgSend)(e, sel);
+        } @catch (NSException* ex) {
+            continue;
+        }
+        if ([v isKindOfClass:[NSURL class]]) {
+            NSString* s = [(NSURL*)v absoluteString];
+            if (s.length > 0) return s;
+        } else if ([v isKindOfClass:[NSString class]] && [(NSString*)v length] > 0) {
+            return (NSString*)v;
+        }
+    }
+    return nil;
+}
+
+int ek_cal_conference_selectors_available(void) {
+    return ([EKEvent instancesRespondToSelector:NSSelectorFromString(@"conferenceURLForDisplay")] ||
+            [EKEvent instancesRespondToSelector:NSSelectorFromString(@"conferenceURL")]) ? 1 : 0;
+}
+
 // --- Event to dictionary conversion ---
 
 static NSDictionary* event_to_dict(EKEvent* e) {
@@ -132,6 +172,7 @@ static NSDictionary* event_to_dict(EKEvent* e) {
     d[@"location"] = e.location ?: [NSNull null];
     d[@"notes"] = e.notes ?: [NSNull null];
     d[@"url"] = e.URL ? [e.URL absoluteString] : [NSNull null];
+    d[@"conferenceURL"] = conference_url_for_event(e) ?: [NSNull null];
     d[@"calendar"] = e.calendar.title ?: @"";
     d[@"calendarID"] = e.calendar.calendarIdentifier ?: @"";
     d[@"status"] = @(e.status);
