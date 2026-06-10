@@ -95,6 +95,19 @@ func simulateRemindersResponse(reminders []Reminder) string {
 				s := a.AbsoluteDate.UTC().Format("2006-01-02T15:04:05.000Z")
 				ra.AbsoluteDate = &s
 			}
+			if a.Location != nil {
+				lat, lng := a.Location.Latitude, a.Location.Longitude
+				ra.Location = &rawAlarmLocation{
+					Title:     a.Location.Title,
+					Latitude:  &lat,
+					Longitude: &lng,
+				}
+				if a.Location.Radius > 0 {
+					radius := a.Location.Radius
+					ra.Location.Radius = &radius
+				}
+				ra.Proximity = string(a.Proximity)
+			}
 			rr.Alarms = append(rr.Alarms, ra)
 		}
 
@@ -941,6 +954,174 @@ func TestMockUpdateReminderWithRecurrence(t *testing.T) {
 
 		if _, ok := m["recurrenceRules"]; ok {
 			t.Error("recurrenceRules should NOT be in update when nil")
+		}
+	})
+}
+
+func TestMockLocationAlarmRoundtrip(t *testing.T) {
+	input := []Reminder{
+		{
+			ID:        "rem-loc",
+			Title:     "Buy milk",
+			List:      "Errands",
+			ListID:    "list-1",
+			HasAlarms: true,
+			Alarms: []Alarm{
+				{
+					Location: &eventkit.StructuredLocation{
+						Title:     "Grocery Store",
+						Latitude:  37.3318,
+						Longitude: -122.0312,
+						Radius:    200,
+					},
+					Proximity: ProximityEnter,
+				},
+				{
+					Location: &eventkit.StructuredLocation{
+						Title:     "Office",
+						Latitude:  37.7749,
+						Longitude: -122.4194,
+					},
+					Proximity: ProximityLeave,
+				},
+			},
+		},
+	}
+
+	jsonStr := simulateRemindersResponse(input)
+	parsed, err := parseRemindersJSON(jsonStr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	r := parsed[0]
+	if len(r.Alarms) != 2 {
+		t.Fatalf("alarms = %d, want 2", len(r.Alarms))
+	}
+
+	enter := r.Alarms[0]
+	if enter.Location == nil {
+		t.Fatal("alarm[0].Location should not be nil")
+	}
+	if enter.Location.Title != "Grocery Store" {
+		t.Errorf("Title = %q", enter.Location.Title)
+	}
+	if enter.Location.Latitude != 37.3318 || enter.Location.Longitude != -122.0312 {
+		t.Errorf("coords = %f,%f", enter.Location.Latitude, enter.Location.Longitude)
+	}
+	if enter.Location.Radius != 200 {
+		t.Errorf("Radius = %f, want 200", enter.Location.Radius)
+	}
+	if enter.Proximity != ProximityEnter {
+		t.Errorf("Proximity = %q, want enter", enter.Proximity)
+	}
+
+	leave := r.Alarms[1]
+	if leave.Location == nil {
+		t.Fatal("alarm[1].Location should not be nil")
+	}
+	if leave.Location.Radius != 0 {
+		t.Errorf("Radius = %f, want 0 (system default)", leave.Location.Radius)
+	}
+	if leave.Proximity != ProximityLeave {
+		t.Errorf("Proximity = %q, want leave", leave.Proximity)
+	}
+}
+
+func TestMarshalLocationAlarm(t *testing.T) {
+	loc := &eventkit.StructuredLocation{
+		Title:     "Grocery Store",
+		Latitude:  37.3318,
+		Longitude: -122.0312,
+		Radius:    150,
+	}
+
+	t.Run("create with location alarm", func(t *testing.T) {
+		data, err := marshalCreateInput(CreateReminderInput{
+			Title:  "Buy milk",
+			Alarms: []Alarm{{Location: loc, Proximity: ProximityEnter}},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var m map[string]any
+		json.Unmarshal([]byte(data), &m)
+
+		alarms := m["alarms"].([]any)
+		if len(alarms) != 1 {
+			t.Fatalf("alarms = %d, want 1", len(alarms))
+		}
+		alarm := alarms[0].(map[string]any)
+		lm, ok := alarm["location"].(map[string]any)
+		if !ok {
+			t.Fatal("location key missing")
+		}
+		if lm["title"] != "Grocery Store" {
+			t.Errorf("title = %v", lm["title"])
+		}
+		if lm["latitude"] != 37.3318 || lm["longitude"] != -122.0312 {
+			t.Errorf("coords = %v,%v", lm["latitude"], lm["longitude"])
+		}
+		if lm["radius"] != 150.0 {
+			t.Errorf("radius = %v, want 150", lm["radius"])
+		}
+		if alarm["proximity"] != "enter" {
+			t.Errorf("proximity = %v, want enter", alarm["proximity"])
+		}
+	})
+
+	t.Run("zero radius omitted", func(t *testing.T) {
+		noRadius := &eventkit.StructuredLocation{Title: "X", Latitude: 1, Longitude: 2}
+		data, _ := marshalCreateInput(CreateReminderInput{
+			Title:  "t",
+			Alarms: []Alarm{{Location: noRadius, Proximity: ProximityLeave}},
+		})
+
+		var m map[string]any
+		json.Unmarshal([]byte(data), &m)
+
+		alarm := m["alarms"].([]any)[0].(map[string]any)
+		lm := alarm["location"].(map[string]any)
+		if _, ok := lm["radius"]; ok {
+			t.Error("radius should be omitted when zero (system default)")
+		}
+		if alarm["proximity"] != "leave" {
+			t.Errorf("proximity = %v, want leave", alarm["proximity"])
+		}
+	})
+
+	t.Run("update replaces with location alarm", func(t *testing.T) {
+		alarms := []Alarm{{Location: loc, Proximity: ProximityEnter}}
+		data, _ := marshalUpdateInput(UpdateReminderInput{Alarms: &alarms})
+
+		var m map[string]any
+		json.Unmarshal([]byte(data), &m)
+
+		alarm := m["alarms"].([]any)[0].(map[string]any)
+		if _, ok := alarm["location"]; !ok {
+			t.Fatal("location key missing in update")
+		}
+		if _, ok := alarm["relativeOffset"]; !ok {
+			t.Error("relativeOffset must still be serialized for non-absolute alarms")
+		}
+	})
+
+	t.Run("plain alarm has no location keys", func(t *testing.T) {
+		data, _ := marshalCreateInput(CreateReminderInput{
+			Title:  "t",
+			Alarms: []Alarm{{RelativeOffset: -15 * time.Minute}},
+		})
+
+		var m map[string]any
+		json.Unmarshal([]byte(data), &m)
+
+		alarm := m["alarms"].([]any)[0].(map[string]any)
+		if _, ok := alarm["location"]; ok {
+			t.Error("location should be absent for plain alarms")
+		}
+		if _, ok := alarm["proximity"]; ok {
+			t.Error("proximity should be absent for plain alarms")
 		}
 	})
 }
