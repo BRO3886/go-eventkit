@@ -693,6 +693,21 @@ static NSDictionary* reminder_to_dict(EKReminder* r) {
 
 // --- List to dictionary conversion ---
 
+// Read one boolean sharing property from a backing REMList via KVC,
+// returning fallback if the private API is unavailable.
+static BOOL read_list_bool(id remList, NSString* key, BOOL fallback) {
+    if (!remList) return fallback;
+    @try {
+        id v = [remList valueForKey:key];
+        if ([v isKindOfClass:[NSNumber class]]) {
+            return [(NSNumber*)v boolValue];
+        }
+    } @catch (NSException* e) {
+        // Property not present on this macOS — fall through.
+    }
+    return fallback;
+}
+
 static NSDictionary* list_to_dict(EKCalendar* cal, int count) {
     NSMutableDictionary* d = [NSMutableDictionary dictionary];
 
@@ -701,6 +716,14 @@ static NSDictionary* list_to_dict(EKCalendar* cal, int count) {
     d[@"source"] = cal.source.title ?: @"";
     d[@"readOnly"] = cal.allowsContentModifications ? @NO : @YES;
     d[@"count"] = @(count);
+
+    // Sharing state. Public EventKit doesn't expose sharing for reminder
+    // lists, so read it from the backing REMList. Defaults (not shared,
+    // owned by me) apply when the private API is unavailable.
+    id remList = load_reminderkit() ? rem_list_from_ek_calendar(cal) : nil;
+    d[@"isShared"] = read_list_bool(remList, @"isShared", NO) ? @YES : @NO;
+    d[@"sharedToMe"] = read_list_bool(remList, @"sharedToMe", NO) ? @YES : @NO;
+    d[@"isOwnedByMe"] = read_list_bool(remList, @"isOwnedByMe", YES) ? @YES : @NO;
 
     // Color as hex string.
     if (cal.color) {

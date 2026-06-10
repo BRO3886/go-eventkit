@@ -60,12 +60,15 @@ type rawRecurrenceEnd struct {
 
 // rawList is the intermediate JSON representation of a reminder list.
 type rawList struct {
-	ID       string `json:"id"`
-	Title    string `json:"title"`
-	Color    string `json:"color"`
-	Source   string `json:"source"`
-	Count    int    `json:"count"`
-	ReadOnly bool   `json:"readOnly"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Color       string `json:"color"`
+	Source      string `json:"source"`
+	Count       int    `json:"count"`
+	ReadOnly    bool   `json:"readOnly"`
+	IsShared    bool   `json:"isShared"`
+	SharedToMe  bool   `json:"sharedToMe"`
+	IsOwnedByMe bool   `json:"isOwnedByMe"`
 }
 
 // parseISO8601 parses an ISO 8601 date string from the bridge.
@@ -211,12 +214,15 @@ func parseListsJSON(jsonStr string) ([]List, error) {
 	result := make([]List, len(raw))
 	for i, r := range raw {
 		result[i] = List{
-			ID:       r.ID,
-			Title:    r.Title,
-			Color:    r.Color,
-			Source:   r.Source,
-			Count:    r.Count,
-			ReadOnly: r.ReadOnly,
+			ID:          r.ID,
+			Title:       r.Title,
+			Color:       r.Color,
+			Source:      r.Source,
+			Count:       r.Count,
+			ReadOnly:    r.ReadOnly,
+			IsShared:    r.IsShared,
+			SharedToMe:  r.SharedToMe,
+			IsOwnedByMe: r.IsOwnedByMe,
 		}
 	}
 	return result, nil
