@@ -654,13 +654,23 @@ func main() {
 		}
 	}
 
-	// --- Test 27: Create reminder in new list ---
+	// --- Test 27: Create reminder in new list (full fields, for move survival) ---
 	var listTestReminderID string
+	moveDue := time.Now().Add(72 * time.Hour).Truncate(time.Minute)
 	if testListID != "" {
 		listTestReminder, err := client.CreateReminder(reminders.CreateReminderInput{
 			Title:    "[go-eventkit test] Reminder in New List",
 			ListName: "[go-eventkit test] Renamed List",
 			Notes:    "Created by go-eventkit integration test. Safe to delete.",
+			DueDate:  &moveDue,
+			Priority: reminders.PriorityHigh,
+			URL:      "https://example.com/move-survival",
+			Flagged:  true,
+			Tags:     []string{"goeventkitmove"},
+			Alarms:   []reminders.Alarm{{RelativeOffset: -30 * time.Minute}},
+			RecurrenceRules: []eventkit.RecurrenceRule{
+				{Frequency: eventkit.FrequencyWeekly, Interval: 1},
+			},
 		})
 		check("Create reminder in new list", err)
 		if err == nil {
@@ -669,22 +679,51 @@ func main() {
 		}
 	}
 
-	// --- Test 27b: Move reminder to another list (ReminderKit reparent) ---
+	// --- Test 27b: Move reminder to another list, all fields survive ---
 	if listTestReminderID != "" {
 		moved, err := client.UpdateReminder(listTestReminderID, reminders.UpdateReminderInput{
 			ListName: &defaultList,
 		})
 		check("Move reminder to another list", err)
 		if err == nil {
-			if moved.List != defaultList {
-				log.Printf("  FAIL: Reminder list not updated: got %q, want %q", moved.List, defaultList)
+			fieldFail := func(field string, got, want any) {
+				log.Printf("  FAIL: %s not preserved across move: got %v, want %v", field, got, want)
 				failed++
-			} else if moved.ID != listTestReminderID {
-				log.Printf("  FAIL: Reminder ID changed on move: got %s, want %s", truncateID(moved.ID), truncateID(listTestReminderID))
-				failed++
-			} else {
-				log.Printf("  Moved reminder to %q, ID stable", moved.List)
 			}
+			if moved.List != defaultList {
+				fieldFail("List", moved.List, defaultList)
+			}
+			if moved.ID != listTestReminderID {
+				fieldFail("ID", truncateID(moved.ID), truncateID(listTestReminderID))
+			}
+			if moved.Title != "[go-eventkit test] Reminder in New List" {
+				fieldFail("Title", moved.Title, "[go-eventkit test] Reminder in New List")
+			}
+			if moved.Notes != "Created by go-eventkit integration test. Safe to delete." {
+				fieldFail("Notes", moved.Notes, "(original notes)")
+			}
+			if moved.DueDate == nil || !moved.DueDate.Equal(moveDue) {
+				fieldFail("DueDate", moved.DueDate, moveDue)
+			}
+			if moved.Priority != reminders.PriorityHigh {
+				fieldFail("Priority", moved.Priority, reminders.PriorityHigh)
+			}
+			if moved.URL != "https://example.com/move-survival" {
+				fieldFail("URL", moved.URL, "https://example.com/move-survival")
+			}
+			if !moved.Flagged {
+				fieldFail("Flagged", moved.Flagged, true)
+			}
+			if !hasTags(moved.Tags, "goeventkitmove") {
+				fieldFail("Tags", moved.Tags, []string{"goeventkitmove"})
+			}
+			if len(moved.Alarms) != 1 || moved.Alarms[0].RelativeOffset != -30*time.Minute {
+				fieldFail("Alarms", moved.Alarms, "1 alarm at -30m")
+			}
+			if !moved.Recurring || len(moved.RecurrenceRules) != 1 || moved.RecurrenceRules[0].Frequency != eventkit.FrequencyWeekly {
+				fieldFail("RecurrenceRules", moved.RecurrenceRules, "weekly x1")
+			}
+			log.Printf("  Moved reminder to %q, ID stable, fields preserved", moved.List)
 		}
 	}
 
