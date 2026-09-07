@@ -23,6 +23,7 @@ No AppleScript. No subprocesses. Direct EventKit access via cgo, with an idiomat
 - **Structured locations** — Geographic coordinates and geofence radius on events
 - **Change notifications** — `WatchChanges(ctx)` delivers a signal on any EventKit database change (iCloud sync, other apps, own writes) via a Go channel
 - **Date parsing** — Shared natural language date parser (`dateparser/`) with support for "tomorrow 2pm", "next friday", "in 3 hours", "eow", ISO 8601, and more
+- **User argument parsing** — `userargs/` turns user- or LLM-supplied argument shapes (`"weekly"`, `["MO","WE"]`, `"15m"`) into validated `RecurrenceRule`s and alert offsets; cgo-free, so it builds and tests on every platform
 - **All accounts** — Sees iCloud, Google, Exchange, subscribed, and local calendars/reminders
 - **Concurrency safe** — Write operations serialized via dispatch queue, inline error returns (no thread-local storage), safe for use from multiple goroutines
 - **Pure Go API** — Idiomatic types, no cgo leaking to consumers
@@ -253,8 +254,42 @@ import "github.com/BRO3886/go-eventkit/dateparser"
 | `FormatDuration(start, end, allDay) string` | Human-readable duration ("1h 30m", "All Day") |
 | `FormatTimeRange(start, end, allDay) string` | Human-readable time range for display |
 | `ParseAlertDuration(s) (time.Duration, error)` | Parse "15m", "1h", "1d" into duration |
+| `StartOfDay(t) time.Time` | `t` at 00:00:00 in `t`'s location |
+| `EndOfDayIfMidnight(t) time.Time` | Bump a midnight `t` to 23:59:59 so a bare date means the whole day |
 
 **Options:** `WithDefaultHour(h)` (bare date hour, default 0), `WithSmartTimeRollover()` (past times → tomorrow), `WithEOWSkipToday()` (eow on Friday → next Friday)
+
+### Userargs Package
+
+```go
+import "github.com/BRO3886/go-eventkit/userargs"
+```
+
+Converts user-facing argument shapes into eventkit primitives. Pure Go — no cgo, so it builds and tests on every platform.
+
+| Function | Description |
+| --- | --- |
+| `ParseRecurrence(*RecurrenceArgs) ([]eventkit.RecurrenceRule, error)` | String frequency + interval/count/until/byday → validated rule |
+| `ParseWeekday(s) (eventkit.Weekday, error)` | `"MO"`, `"Mon"`, `"Monday"` (any case) → weekday |
+| `ParseWeekdays([]string) ([]eventkit.Weekday, error)` | Same, over a slice, erroring on the first unknown entry |
+| `ParseAlertOffsets([]string) ([]time.Duration, error)` | `"15m"`, `"1h"`, `"1d"` → positive offsets *before* the event |
+
+```go
+rules, err := userargs.ParseRecurrence(&userargs.RecurrenceArgs{
+    Frequency: "weekly",
+    Interval:  2,
+    ByDay:     []string{"MO", "WE", "FR"},
+    Until:     "dec 31",
+})
+input.RecurrenceRules = rules // nil when Frequency is empty — no nil-check needed
+
+offsets, err := userargs.ParseAlertOffsets([]string{"15m", "1h"})
+for _, d := range offsets {
+    input.Alerts = append(input.Alerts, calendar.Alert{RelativeOffset: -d})
+}
+```
+
+`Count` and `Until` are mutually exclusive. `ByDay` is accepted for weekly, monthly, and yearly, and rejected for daily. Every rule is run through `RecurrenceRule.Validate()` before it is returned. Offsets are capped at `MaxAlertOffset` (one year).
 
 ### Reminders Package
 
@@ -350,6 +385,9 @@ graph LR
     App["Your Go App"] --> Cal["calendar/"]
     App --> Rem["reminders/"]
     App --> DP["dateparser/<br/><i>date parsing</i>"]
+    App --> UA["userargs/<br/><i>arg parsing</i>"]
+    UA --> DP
+    UA --> EK
     Cal --> EK["eventkit.go<br/><i>shared types</i>"]
     Rem --> EK
 
@@ -382,6 +420,7 @@ graph LR
     style EKStore1 fill:#5cb85c,color:#fff
     style EKStore2 fill:#5cb85c,color:#fff
     style DP fill:#d9534f,color:#fff
+    style UA fill:#d9534f,color:#fff
 ```
 
 The data flow is: **Go types → JSON string → cgo → ObjC → EventKit** (and back). Each package has its own `EKEventStore` singleton — C objects can't cross cgo package boundaries. The public API is pure Go; cgo never leaks to consumers.
@@ -402,6 +441,7 @@ These are Apple EventKit limitations, not bugs:
 go build ./...                                        # Build
 go test ./...                                         # Unit tests (includes dateparser)
 go test ./dateparser/...                              # Dateparser tests only (35 tests)
+go test ./userargs/...                                # Userargs tests only (cgo-free)
 go run -tags integration ./scripts/integration.go     # Calendar integration tests
 go run -tags integration ./scripts/integration_reminders.go  # Reminder integration tests
 GOOS=linux CGO_ENABLED=0 go build ./...               # Cross-platform stubs
