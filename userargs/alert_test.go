@@ -43,13 +43,14 @@ func TestParseAlertOffsets_InvalidInput(t *testing.T) {
 }
 
 func TestParseAlertOffsets_ZeroDuration(t *testing.T) {
-	// ParseAlertDuration("0m") returns 0, which should fail the positivity check.
-	_, err := ParseAlertOffsets([]string{"0m"})
-	if err == nil {
-		t.Fatal("expected error for zero duration")
+	// A zero offset means "alert at the time of the event" — a real feature in
+	// every calendar UI, so it must survive parsing rather than error.
+	got, err := ParseAlertOffsets([]string{"0m"})
+	if err != nil {
+		t.Fatalf("zero offset should be accepted, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "must be positive") {
-		t.Errorf("error should contain 'must be positive', got: %v", err)
+	if len(got) != 1 || got[0] != 0 {
+		t.Errorf("got %v, want [0s]", got)
 	}
 }
 

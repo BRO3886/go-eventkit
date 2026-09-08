@@ -14,7 +14,7 @@ import (
 // pathological inputs like "99999999999999999d").
 const MaxAlertOffset = 365 * 24 * time.Hour
 
-// ParseAlertOffsets converts strings like "15m", "1h", "1d" into positive
+// ParseAlertOffsets converts strings like "15m", "1h", "1d" into non-negative
 // durations representing the offset *before* the event. Callers wrap each
 // result into the native alert/alarm type:
 //
@@ -22,8 +22,11 @@ const MaxAlertOffset = 365 * 24 * time.Hour
 //	    alerts = append(alerts, calendar.Alert{RelativeOffset: -d})
 //	}
 //
+// A zero offset is valid and means "alert at the time of the event" — every
+// calendar UI offers it, so it is passed through rather than rejected.
+//
 // Returns an error if any input fails dateparser.ParseAlertDuration, is
-// non-positive, or exceeds MaxAlertOffset. The negation is intentionally
+// negative, or exceeds MaxAlertOffset. The negation is intentionally
 // *not* applied here — callers may want positive offsets for after-event
 // alerts in some contexts.
 func ParseAlertOffsets(in []string) ([]time.Duration, error) {
@@ -33,8 +36,8 @@ func ParseAlertOffsets(in []string) ([]time.Duration, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid alert offset %q: %w", s, err)
 		}
-		if d <= 0 {
-			return nil, fmt.Errorf("alert offset %q must be positive", s)
+		if d < 0 {
+			return nil, fmt.Errorf("alert offset %q must not be negative", s)
 		}
 		if d > MaxAlertOffset {
 			return nil, fmt.Errorf("alert offset %q exceeds one year before event", s)
