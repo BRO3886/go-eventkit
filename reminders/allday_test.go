@@ -19,6 +19,26 @@ func TestParseReminderJSONAllDay(t *testing.T) {
 		}
 	})
 
+	t.Run("all-day due date round-trips its calendar date", func(t *testing.T) {
+		// East of UTC, local midnight on Sep 30 is Sep 29 in UTC. Reading it
+		// back and writing it again must still say Sep 30.
+		orig := time.Local
+		time.Local = time.FixedZone("JST", 9*3600)
+		defer func() { time.Local = orig }()
+
+		r, err := parseReminderJSON(`{"id":"A","title":"t","dueDate":"2026-09-29T15:00:00.000Z","dueDateAllDay":true}`)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		jsonStr, err := marshalUpdateInput(UpdateReminderInput{DueDate: r.DueDate, DueDateAllDay: r.DueDateAllDay})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(jsonStr, `"dueDateAllDay":"2026-09-30"`) {
+			t.Errorf("round trip = %s, want dueDateAllDay 2026-09-30", jsonStr)
+		}
+	})
+
 	t.Run("timed due date", func(t *testing.T) {
 		r, err := parseReminderJSON(`{"id":"A","title":"t","dueDate":"2026-09-30T04:00:00.000Z"}`)
 		if err != nil {

@@ -1348,6 +1348,8 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
             }
 
             // Due date: all-day (date-only components), timed, or cleared.
+            NSDateComponents* timedDueBeforeAllDay = nil;
+            NSDateComponents* allDayComps = nil;
             if (input[@"dueDateAllDay"]) {
                 NSDateComponents* comps = all_day_components(input[@"dueDateAllDay"]);
                 if (!comps) {
@@ -1357,17 +1359,16 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
                 // Reminders only recomputes its all-day display flag when the
                 // due value changes, so turning a timed due (e.g. midnight on
                 // the same day) into an all-day one in a single save leaves it
-                // displayed as timed, and overdue. Clear the due date and save
-                // first so the all-day save is always a real change.
+                // displayed as timed, and overdue. A timed due therefore gets
+                // an extra save through a different date first; that happens
+                // just before the final save, after all input is validated.
+                // Until then the timed due stays in place.
                 if (reminder.dueDateComponents && !is_all_day(reminder.dueDateComponents)) {
-                    reminder.dueDateComponents = nil;
-                    NSError* clearError = nil;
-                    if (![store saveReminder:reminder commit:YES error:&clearError]) {
-                        res.error = strdup([[NSString stringWithFormat:@"failed to save: %@", clearError.localizedDescription] UTF8String]);
-                        return;
-                    }
+                    timedDueBeforeAllDay = [reminder.dueDateComponents copy];
+                    allDayComps = comps;
+                } else {
+                    reminder.dueDateComponents = comps;
                 }
-                reminder.dueDateComponents = comps;
             } else if ([input objectForKey:@"dueDate"]) {
                 if (input[@"dueDate"] == [NSNull null] || input[@"dueDate"] == nil) {
                     reminder.dueDateComponents = nil;
@@ -1494,10 +1495,35 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
                 }
             }
 
+            // Timed -> all-day: first save all-day on the following day, then
+            // the requested day in the final save, so each save changes the
+            // due value (see the due date above). Stepping through another
+            // date instead of clearing keeps a due date throughout, which
+            // recurring reminders require.
+            if (timedDueBeforeAllDay) {
+                NSCalendar* cal = [NSCalendar currentCalendar];
+                NSDate* day = [cal dateFromComponents:allDayComps];
+                NSDate* nextDay = [cal dateByAddingUnit:NSCalendarUnitDay value:1 toDate:day options:0];
+                reminder.dueDateComponents = [cal components:NSCalendarUnitYear | NSCalendarUnitMonth | NSCalendarUnitDay
+                                                    fromDate:nextDay];
+                NSError* stepError = nil;
+                if (![store saveReminder:reminder commit:YES error:&stepError]) {
+                    res.error = strdup([[NSString stringWithFormat:@"failed to update reminder: %@",
+                        stepError.localizedDescription] UTF8String]);
+                    return;
+                }
+                reminder.dueDateComponents = allDayComps;
+            }
+
             // Save via EventKit.
             NSError* saveError = nil;
             BOOL saved = [store saveReminder:reminder commit:YES error:&saveError];
             if (!saved) {
+                if (timedDueBeforeAllDay) {
+                    // Don't leave the stepping date behind: restore the timed due.
+                    reminder.dueDateComponents = timedDueBeforeAllDay;
+                    [store saveReminder:reminder commit:YES error:nil];
+                }
                 res.error = strdup([[NSString stringWithFormat:@"failed to update reminder: %@",
                     saveError.localizedDescription] UTF8String]);
                 return;

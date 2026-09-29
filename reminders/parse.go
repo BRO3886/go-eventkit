@@ -146,6 +146,14 @@ func convertRawReminder(r *rawReminder) Reminder {
 		HasAlarms:      r.HasAlarms,
 	}
 
+	// An all-day due is midnight local time on its date. Keep it in local
+	// time so its calendar date survives a read/write round trip (in UTC it
+	// can fall on the previous day).
+	if rem.DueDateAllDay && rem.DueDate != nil {
+		local := rem.DueDate.In(time.Local)
+		rem.DueDate = &local
+	}
+
 	// Convert recurrence rules.
 	rem.RecurrenceRules = make([]eventkit.RecurrenceRule, len(r.RecurrenceRules))
 	for i, rr := range r.RecurrenceRules {
