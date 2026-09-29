@@ -888,24 +888,30 @@ static NSString* series_id(NSString* eid) {
 // start (occurrenceDate) matches occ. eventWithIdentifier: always resolves to
 // the series' first occurrence, so writes aimed at a later occurrence must
 // look the instance up from a date-range fetch instead. Detached occurrences
-// keep their original occurrenceDate, so they are found too as long as they
-// were not moved more than a week away. eid may be the series ID or any
-// detached occurrence's ID.
-static EKEvent* find_occurrence(EKEventStore* store, NSString* eid, NSDate* occ) {
-    if (!occ) return nil;
-    EKEvent* master = [store eventWithIdentifier:eid];
-    if (!master) return nil;
-    NSString* series = series_id(eid);
-    NSTimeInterval week = 7 * 24 * 60 * 60;
-    NSPredicate* predicate = [store predicateForEventsWithStartDate:[occ dateByAddingTimeInterval:-week]
-                                                           endDate:[occ dateByAddingTimeInterval:week]
-                                                         calendars:@[master.calendar]];
+// keep their original occurrenceDate but are fetched at their current start,
+// so the search widens from a week to a year either side before giving up.
+// eid may be the series ID or any detached occurrence's ID.
+static EKEvent* find_occurrence_within(EKEventStore* store, EKCalendar* cal, NSString* series,
+                                       NSDate* occ, NSTimeInterval radius) {
+    NSPredicate* predicate = [store predicateForEventsWithStartDate:[occ dateByAddingTimeInterval:-radius]
+                                                           endDate:[occ dateByAddingTimeInterval:radius]
+                                                         calendars:@[cal]];
     for (EKEvent* e in [store eventsMatchingPredicate:predicate]) {
         if (![series_id(e.eventIdentifier) isEqualToString:series]) continue;
         NSDate* od = e.occurrenceDate ?: e.startDate;
         if (fabs([od timeIntervalSinceDate:occ]) < 1.0) return e;
     }
     return nil;
+}
+
+static EKEvent* find_occurrence(EKEventStore* store, NSString* eid, NSDate* occ) {
+    if (!occ) return nil;
+    EKEvent* master = [store eventWithIdentifier:eid];
+    if (!master) return nil;
+    NSString* series = series_id(eid);
+    NSTimeInterval day = 24 * 60 * 60;
+    return find_occurrence_within(store, master.calendar, series, occ, 7 * day)
+        ?: find_occurrence_within(store, master.calendar, series, occ, 366 * day);
 }
 
 // lookup_event resolves an event by identifier, or a single occurrence of it
