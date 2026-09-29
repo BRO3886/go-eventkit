@@ -2146,3 +2146,18 @@ func TestLargeEventSet(t *testing.T) {
 		t.Errorf("parsed %d events, want 100", len(parsed))
 	}
 }
+
+func TestFormatOccurrenceDate(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := formatOccurrenceDate(time.Date(2026, 12, 16, 9, 0, 0, 0, ny))
+	if want := "2026-12-16T14:00:00.000Z"; got != want {
+		t.Errorf("formatOccurrenceDate = %q, want %q", got, want)
+	}
+	// Round-trips through the parser used for bridge output.
+	if back := parseISO8601(got); !back.Equal(time.Date(2026, 12, 16, 14, 0, 0, 0, time.UTC)) {
+		t.Errorf("round trip = %v", back)
+	}
+}
