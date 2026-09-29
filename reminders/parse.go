@@ -16,6 +16,7 @@ type rawReminder struct {
 	List            string              `json:"list"`
 	ListID          string              `json:"listID"`
 	DueDate         *string             `json:"dueDate"`
+	DueDateAllDay   bool                `json:"dueDateAllDay"`
 	RemindMeDate    *string             `json:"remindMeDate"`
 	CompletionDate  *string             `json:"completionDate"`
 	CreatedAt       *string             `json:"createdAt"`
@@ -131,6 +132,7 @@ func convertRawReminder(r *rawReminder) Reminder {
 		List:           r.List,
 		ListID:         r.ListID,
 		DueDate:        parseOptionalTime(r.DueDate),
+		DueDateAllDay:  r.DueDateAllDay,
 		RemindMeDate:   parseOptionalTime(r.RemindMeDate),
 		CompletionDate: parseOptionalTime(r.CompletionDate),
 		CreatedAt:      parseOptionalTime(r.CreatedAt),
@@ -142,6 +144,14 @@ func convertRawReminder(r *rawReminder) Reminder {
 		Tags:           append([]string(nil), r.Tags...),
 		Recurring:      r.Recurring,
 		HasAlarms:      r.HasAlarms,
+	}
+
+	// An all-day due is midnight local time on its date. Keep it in local
+	// time so its calendar date survives a read/write round trip (in UTC it
+	// can fall on the previous day).
+	if rem.DueDateAllDay && rem.DueDate != nil {
+		local := rem.DueDate.In(time.Local)
+		rem.DueDate = &local
 	}
 
 	// Convert recurrence rules.
@@ -290,6 +300,28 @@ func marshalUpdateListInput(input UpdateListInput) (string, error) {
 	return string(data), nil
 }
 
+// setDueDate writes a due date into a bridge input map. An all-day due date
+// is sent as a bare calendar date ("dueDateAllDay": "YYYY-MM-DD") taken from
+// t's own location, so the bridge can save dueDateComponents with no time of
+// day; converting to UTC first could shift it to the neighboring day.
+func setDueDate(m map[string]any, t time.Time, allDay bool) {
+	if allDay {
+		m["dueDateAllDay"] = t.Format("2006-01-02")
+		return
+	}
+	m["dueDate"] = t.UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+// parseAmbiguousID builds an [*AmbiguousIDError] from the bridge's JSON
+// array of reminders whose IDs share prefix.
+func parseAmbiguousID(prefix, jsonStr string) error {
+	candidates, err := parseRemindersJSON(jsonStr)
+	if err != nil {
+		return err
+	}
+	return &AmbiguousIDError{Prefix: prefix, Candidates: candidates}
+}
+
 // marshalCreateInput converts CreateReminderInput to JSON for the bridge.
 func marshalCreateInput(input CreateReminderInput) (string, error) {
 	m := map[string]any{
@@ -316,7 +348,7 @@ func marshalCreateInput(input CreateReminderInput) (string, error) {
 	}
 
 	if input.DueDate != nil {
-		m["dueDate"] = input.DueDate.UTC().Format("2006-01-02T15:04:05.000Z")
+		setDueDate(m, *input.DueDate, input.DueDateAllDay)
 	}
 	if input.RemindMeDate != nil {
 		m["remindMeDate"] = input.RemindMeDate.UTC().Format("2006-01-02T15:04:05.000Z")
@@ -401,7 +433,7 @@ func marshalUpdateInput(input UpdateReminderInput) (string, error) {
 	if input.ClearDueDate {
 		m["dueDate"] = nil
 	} else if input.DueDate != nil {
-		m["dueDate"] = input.DueDate.UTC().Format("2006-01-02T15:04:05.000Z")
+		setDueDate(m, *input.DueDate, input.DueDateAllDay)
 	}
 
 	if input.RemindMeDate != nil {
