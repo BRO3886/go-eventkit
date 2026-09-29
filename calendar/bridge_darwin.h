@@ -31,14 +31,19 @@ ek_result_t ek_cal_create_event(const char* json_input);
 
 // ek_cal_update_event updates an existing event.
 // event_id is the eventIdentifier, json_input contains fields to update,
+// occurrence_date (ISO 8601, nullable) selects one occurrence of a recurring
+// event by its original start; NULL targets the event as eventWithIdentifier
+// resolves it (the series' first occurrence).
 // span is 0 for this event only, 1 for future events.
 // Returns the updated event as JSON. Caller must free result.
-ek_result_t ek_cal_update_event(const char* event_id, const char* json_input, int span);
+ek_result_t ek_cal_update_event(const char* event_id, const char* occurrence_date, const char* json_input, int span);
 
 // ek_cal_delete_event deletes an event.
+// occurrence_date is as for ek_cal_update_event; when set, the delete is
+// verified and fails if the occurrence is still present afterwards.
 // span is 0 for this event only, 1 for future events.
 // Returns "ok" on success. Caller must free result.
-ek_result_t ek_cal_delete_event(const char* event_id, int span);
+ek_result_t ek_cal_delete_event(const char* event_id, const char* occurrence_date, int span);
 
 // ek_cal_create_calendar creates a new calendar from the given JSON input.
 // Returns the created calendar as JSON. Caller must free result.
