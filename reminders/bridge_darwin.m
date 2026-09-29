@@ -1382,13 +1382,15 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
                 // displayed as timed, and overdue. The same goes for re-saving
                 // a reminder already stuck in that state, whose components
                 // already look all-day. So when the current due is timed, or
-                // is on the target date, it gets an extra save through a
-                // different date first; that happens just before the final
-                // save, after all input is validated. Until then the current
-                // due stays in place.
+                // is stuck on the target date (or its display flag can't be
+                // read), it gets an extra save through a different date first;
+                // that happens just before the final save, after all input is
+                // validated. Until then the current due stays in place.
                 NSDateComponents* cur = reminder.dueDateComponents;
                 BOOL sameDate = cur && cur.year == comps.year && cur.month == comps.month && cur.day == comps.day;
-                if (cur && (!is_all_day(cur) || sameDate)) {
+                BOOL stuck = sameDate && is_all_day(cur) &&
+                    !read_display_all_day(load_reminderkit() ? rem_reminder_from_ek(reminder) : nil, NO);
+                if (cur && (!is_all_day(cur) || stuck)) {
                     dueBeforeAllDay = [cur copy];
                     allDayComps = comps;
                 } else {

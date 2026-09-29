@@ -206,5 +206,8 @@ where l.ZNAME = '%s' and r.ZTITLE = '%s' and r.ZMARKEDFORDELETION = 0 and l.ZMAR
 			return allDay, displayAllDay, true
 		}
 	}
+	// Without the store, the display flag this script exists to check can't
+	// be verified, so the run must not pass.
+	log.Panicf("FATAL: can't read %q from the Reminders store (needs Full Disk Access for the terminal); display flags unverified", name)
 	return 0, 0, false
 }
