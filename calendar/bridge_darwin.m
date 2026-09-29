@@ -877,21 +877,31 @@ ek_result_t ek_cal_create_event(const char* json_input) {
     return res;
 }
 
+// series_id strips the "/RID=<unix time>" suffix EventKit gives a detached
+// occurrence's identifier, leaving the ID every occurrence of the series shares.
+static NSString* series_id(NSString* eid) {
+    NSRange r = [eid rangeOfString:@"/RID="];
+    return r.location == NSNotFound ? eid : [eid substringToIndex:r.location];
+}
+
 // find_occurrence returns the instance of a recurring event whose original
 // start (occurrenceDate) matches occ. eventWithIdentifier: always resolves to
 // the series' first occurrence, so writes aimed at a later occurrence must
 // look the instance up from a date-range fetch instead. Detached occurrences
 // keep their original occurrenceDate, so they are found too as long as they
-// were not moved more than a week away.
+// were not moved more than a week away. eid may be the series ID or any
+// detached occurrence's ID.
 static EKEvent* find_occurrence(EKEventStore* store, NSString* eid, NSDate* occ) {
+    if (!occ) return nil;
     EKEvent* master = [store eventWithIdentifier:eid];
     if (!master) return nil;
+    NSString* series = series_id(eid);
     NSTimeInterval week = 7 * 24 * 60 * 60;
     NSPredicate* predicate = [store predicateForEventsWithStartDate:[occ dateByAddingTimeInterval:-week]
                                                            endDate:[occ dateByAddingTimeInterval:week]
                                                          calendars:@[master.calendar]];
     for (EKEvent* e in [store eventsMatchingPredicate:predicate]) {
-        if (![e.eventIdentifier isEqualToString:eid]) continue;
+        if (![series_id(e.eventIdentifier) isEqualToString:series]) continue;
         NSDate* od = e.occurrenceDate ?: e.startDate;
         if (fabs([od timeIntervalSinceDate:occ]) < 1.0) return e;
     }
