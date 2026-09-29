@@ -135,6 +135,25 @@ func run(client *calendar.Client) int {
 		day(0): "First", day(1): "Second", day(2): "Third", day(4): "Later", day(5): "Later",
 	}))
 
+	// 5. An occurrence moved more than a week is still found by its original date.
+	movedStart := week(1).AddDate(0, 0, 20)
+	movedEnd := movedStart.Add(time.Hour)
+	_, err = client.UpdateEventOccurrence(id, week(1), calendar.UpdateEventInput{StartDate: &movedStart, EndDate: &movedEnd}, calendar.SpanThisEvent)
+	check("move occurrence 2 by 20 days", err)
+	_, err = client.UpdateEventOccurrence(id, week(1), calendar.UpdateEventInput{Title: ptr("Moved")}, calendar.SpanThisEvent)
+	check("update moved occurrence by original date", err)
+	var movedTitle string
+	for _, e := range list() {
+		if e.StartDate.Equal(movedStart) {
+			movedTitle = e.Title
+		}
+	}
+	if movedTitle != "Moved" {
+		check("moved occurrence renamed", fmt.Errorf("title at %v = %q", movedStart, movedTitle))
+	} else {
+		check("moved occurrence renamed", nil)
+	}
+
 	return failed
 }
 
