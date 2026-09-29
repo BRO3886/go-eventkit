@@ -99,7 +99,7 @@ func run(client *calendar.Client) int {
 	}))
 
 	// 2. Detach the first occurrence, then delete occurrence #4 (index 3).
-	_, err = client.UpdateEventOccurrence(id, week(0), calendar.UpdateEventInput{Title: ptr("First")}, calendar.SpanThisEvent)
+	firstOcc, err := client.UpdateEventOccurrence(id, week(0), calendar.UpdateEventInput{Title: ptr("First")}, calendar.SpanThisEvent)
 	check("detach occurrence 1", err)
 	err = client.DeleteEventOccurrence(id, week(3), calendar.SpanThisEvent)
 	check("delete occurrence 4 after detaching 1", err)
@@ -107,6 +107,17 @@ func run(client *calendar.Client) int {
 	check("occurrence 4 gone, others intact", expect(got, map[string]string{
 		day(0): "First", day(1): "Series", day(2): "Third", day(4): "Series", day(5): "Series",
 	}))
+
+	// 2b. A detached occurrence's ID ("<series>/RID=...") reaches its siblings.
+	if firstOcc != nil {
+		log.Printf("  detached ID: %s", firstOcc.ID)
+		_, err = client.UpdateEventOccurrence(firstOcc.ID, week(1), calendar.UpdateEventInput{Title: ptr("Second")}, calendar.SpanThisEvent)
+		check("update sibling via detached ID", err)
+		got = titles()
+		check("occurrence 2 renamed via detached ID", expect(got, map[string]string{
+			day(0): "First", day(1): "Second", day(2): "Third", day(4): "Series", day(5): "Series",
+		}))
+	}
 
 	// 3. Deleting an occurrence that no longer exists fails loudly.
 	err = client.DeleteEventOccurrence(id, week(3), calendar.SpanThisEvent)
@@ -121,7 +132,7 @@ func run(client *calendar.Client) int {
 	check("update future from occurrence 5", err)
 	got = titles()
 	check("future span starts at occurrence 5", expect(got, map[string]string{
-		day(0): "First", day(1): "Series", day(2): "Third", day(4): "Later", day(5): "Later",
+		day(0): "First", day(1): "Second", day(2): "Third", day(4): "Later", day(5): "Later",
 	}))
 
 	return failed
