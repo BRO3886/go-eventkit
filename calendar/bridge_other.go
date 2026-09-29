@@ -33,8 +33,18 @@ func (c *Client) UpdateEvent(id string, input UpdateEventInput, span Span) (*Eve
 	return nil, ErrUnsupported
 }
 
+// UpdateEventOccurrence updates one occurrence of a recurring event.
+func (c *Client) UpdateEventOccurrence(id string, occurrenceDate time.Time, input UpdateEventInput, span Span) (*Event, error) {
+	return nil, ErrUnsupported
+}
+
 // DeleteEvent permanently removes an event.
 func (c *Client) DeleteEvent(id string, span Span) error { return ErrUnsupported }
+
+// DeleteEventOccurrence removes one occurrence of a recurring event.
+func (c *Client) DeleteEventOccurrence(id string, occurrenceDate time.Time, span Span) error {
+	return ErrUnsupported
+}
 
 // DeleteEvents permanently removes multiple events in a single bridge call.
 func (c *Client) DeleteEvents(ids []string, span Span) map[string]error {
