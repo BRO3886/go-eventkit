@@ -1,10 +1,9 @@
 //go:build darwin && integration
 
 // Package main is an integration check for subtasks (parent/child
-// reminders) against live macOS Reminders data. It writes only reminders it
-// creates, titled "ZZ subtask ...", in an existing scratch list (default
-// "claude-sync-test"; override with SUBTASK_TEST_LIST), and deletes them
-// afterwards. It refuses to run if such reminders are already there.
+// reminders) against live macOS Reminders data. It works only inside a
+// throwaway list, which it creates and deletes (it refuses to run if the
+// list already exists).
 //
 // EventKit can't see subtasks, so every write is also checked in the
 // Reminders store with read-only sqlite (ZPARENTREMINDER, plus the CloudKit
@@ -25,24 +24,22 @@ import (
 	"github.com/BRO3886/go-eventkit/reminders"
 )
 
-const prefix = "ZZ subtask "
+const (
+	testList = "ZZ Subtask Test"
+	prefix   = "ZZ subtask "
+)
 
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix("[subtask-integration] ")
-	// Registered first, so it runs last: after the cleanup below. Failures
-	// after the first reminder exists use log.Panicf so the cleanup runs.
+	// Registered first, so it runs last: after the list cleanup below.
+	// Failures after the list exists use log.Panicf so the cleanup runs.
 	defer func() {
 		if r := recover(); r != nil {
 			exitCode = 1
 		}
 		os.Exit(exitCode)
 	}()
-
-	testList := os.Getenv("SUBTASK_TEST_LIST")
-	if testList == "" {
-		testList = "claude-sync-test"
-	}
 
 	client, err := reminders.New()
 	if err != nil {
@@ -52,38 +49,32 @@ func main() {
 	if err != nil {
 		log.Fatalf("FATAL: %v", err)
 	}
-	found := false
+	source := ""
 	for _, l := range lists {
 		if l.Title == testList {
-			found = true
-			if l.IsShared || l.SharedToMe {
-				log.Fatalf("FATAL: list %q is shared; use an unshared scratch list", testList)
-			}
+			log.Fatalf("FATAL: list %q already exists; delete it first", testList)
+		}
+		if source == "" && !l.ReadOnly && l.Source != "" {
+			source = l.Source
 		}
 	}
-	if !found {
-		log.Fatalf("FATAL: list %q not found", testList)
+	list, err := client.CreateList(reminders.CreateListInput{Title: testList, Source: source})
+	if err != nil {
+		log.Fatalf("FATAL: create list: %v", err)
 	}
-	if mine := ours(client, testList); len(mine) > 0 {
-		log.Fatalf("FATAL: %d %q reminders already in %q; delete them first", len(mine), prefix, testList)
-	}
-
 	defer func() {
-		ids := []string{}
-		for _, r := range ours(client, testList) {
-			ids = append(ids, r.ID)
+		if err := client.DeleteList(list.ID); err != nil {
+			log.Printf("WARN: delete list: %v", err)
 		}
-		if len(ids) > 0 {
-			for id, err := range client.DeleteReminders(ids) {
-				log.Printf("WARN: delete %s: %v", id, err)
+		lists, _ := client.Lists()
+		for _, l := range lists {
+			if l.Title == testList {
+				log.Printf("FAIL: list %q still exists after delete", testList)
+				exitCode = 1
+				return
 			}
 		}
-		if left := ours(client, testList); len(left) > 0 {
-			log.Printf("FAIL: %d test reminders still in %q after delete", len(left), testList)
-			exitCode = 1
-			return
-		}
-		log.Printf("cleanup: %d test reminders deleted from %q", len(ids), testList)
+		log.Printf("cleanup: list %q deleted", testList)
 	}()
 
 	failed := 0
@@ -194,21 +185,6 @@ func parentIDOf(r *reminders.Reminder) string {
 		return "<nil>"
 	}
 	return r.ParentID
-}
-
-// ours returns this script's reminders (open and completed) in the list.
-func ours(client *reminders.Client, list string) []reminders.Reminder {
-	all, err := client.Reminders(reminders.WithList(list))
-	if err != nil {
-		log.Panicf("FATAL: list reminders: %v", err)
-	}
-	var mine []reminders.Reminder
-	for _, r := range all {
-		if strings.HasPrefix(r.Title, prefix) {
-			mine = append(mine, r)
-		}
-	}
-	return mine
 }
 
 // storeQuery runs a read-only query against the Reminders store that has
