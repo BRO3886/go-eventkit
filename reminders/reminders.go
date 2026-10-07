@@ -149,6 +149,10 @@ type Reminder struct {
 	URL string `json:"url,omitempty"`
 	// Tags are native Reminders hashtags without the leading "#".
 	Tags []string `json:"tags,omitempty"`
+	// ParentID is the ID of the reminder this one is a subtask of, or empty
+	// for a top-level reminder. Read via the private ReminderKit framework,
+	// since EventKit does not expose subtasks.
+	ParentID string `json:"parentID,omitempty"`
 	// Recurring is true if this reminder has recurrence rules.
 	Recurring bool `json:"recurring"`
 	// RecurrenceRules contains the recurrence patterns for this reminder.
@@ -430,6 +434,13 @@ type UpdateReminderInput struct {
 	// Tags replaces native Reminders hashtags. Pass an empty slice to remove all tags.
 	// Pass nil to leave tags unchanged.
 	Tags *[]string
+	// ParentID nests the reminder as a subtask of the reminder with this ID
+	// (full ID or unique prefix). Pass a pointer to "" to make it top-level
+	// again, or nil to leave it unchanged. The parent must be top-level and
+	// in the same list (after any ListName move), and the reminder must not
+	// have subtasks of its own: Reminders allows one level. Written via the
+	// private ReminderKit framework, since EventKit does not expose subtasks.
+	ParentID *string
 	// Alarms replaces all existing alarms. Pass an empty slice to remove all alarms.
 	Alarms *[]Alarm
 	// RecurrenceRules replaces all existing recurrence rules.

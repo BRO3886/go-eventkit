@@ -631,6 +631,111 @@ static BOOL move_reminder_via_reminderkit(EKReminder* ekReminder, EKCalendar* ta
     return YES;
 }
 
+// --- Subtasks (parent/child) via private ReminderKit ---
+//
+// Public EventKit has no subtask API. EKReminder has a private parentID, but
+// it is never populated on fetched reminders, and setting it does not
+// persist. ReminderKit models subtasks directly: REMReminder.parentReminderID
+// (a REMObjectID) reads the parent, and a parent's change item exposes a
+// subtaskContext whose addReminderChangeItem: nests a reminder under it.
+// Reminders allows a single level: a subtask can't have subtasks.
+
+// The parent's ID (in calendarItemIdentifier form) of a REMReminder, or nil
+// if it is top-level or the private API is unavailable.
+static NSString* read_parent_id(id remReminder) {
+    if (!remReminder) return nil;
+    @try {
+        id objectID = [remReminder valueForKey:@"parentReminderID"];
+        if (!objectID) return nil;
+        id uuid = [objectID valueForKey:@"uuid"];
+        if ([uuid isKindOfClass:[NSUUID class]]) return [(NSUUID*)uuid UUIDString];
+    } @catch (NSException* e) {
+    }
+    return nil;
+}
+
+// Whether a REMReminder has subtasks. Errs toward YES when it can't tell, so
+// callers refuse to nest it rather than create a second level.
+static BOOL has_subtasks(id remReminder) {
+    if (!remReminder) return YES;
+    @try {
+        id ctx = [remReminder valueForKey:@"subtaskContext"];
+        SEL hasSel = NSSelectorFromString(@"hasSubtasksWithError:");
+        if (!ctx || ![ctx respondsToSelector:hasSel]) return YES;
+        NSError* err = nil;
+        BOOL has = ((BOOL(*)(id,SEL,NSError**))objc_msgSend)(ctx, hasSel, &err);
+        return err ? YES : has;
+    } @catch (NSException* e) {
+        return YES;
+    }
+}
+
+// Nests child under parent, or makes child top-level in its list when parent
+// is nil. Both must already be saved, in the same list. Returns nil on
+// success, or an error message.
+static NSString* write_parent(EKReminder* child, EKReminder* parent) {
+    if (!load_reminderkit()) return @"subtasks need the private ReminderKit framework, which isn't available";
+    id remChild = rem_reminder_from_ek(child);
+    id remParent = parent ? rem_reminder_from_ek(parent) : nil;
+    if (!remChild || (parent && !remParent)) return @"couldn't read the reminder through ReminderKit";
+
+    id remStore = nil;
+    Ivar storeIvar = find_ivar([remChild class], "_store");
+    if (storeIvar) remStore = object_getIvar(remChild, storeIvar);
+    Class remStoreClass = objc_getClass("REMStore");
+    if (!remStore || !remStoreClass || ![remStore isKindOfClass:remStoreClass]) return @"couldn't reach the ReminderKit store";
+
+    Class saveReqClass = objc_getClass("REMSaveRequest");
+    SEL initSel = NSSelectorFromString(@"initWithStore:");
+    SEL updateReminderSel = NSSelectorFromString(@"updateReminder:");
+    SEL addSel = NSSelectorFromString(@"addReminderChangeItem:");
+    SEL saveSel = NSSelectorFromString(@"saveSynchronouslyWithError:");
+    if (!saveReqClass) return @"ReminderKit save API unavailable";
+    id saveReq = [saveReqClass alloc];
+    if (![saveReq respondsToSelector:initSel]) return @"ReminderKit save API unavailable";
+    saveReq = ((id(*)(id,SEL,id))objc_msgSend)(saveReq, initSel, remStore);
+    if (!saveReq || ![saveReq respondsToSelector:updateReminderSel] || ![saveReq respondsToSelector:saveSel]) {
+        return @"ReminderKit save API unavailable";
+    }
+
+    id childItem = ((id(*)(id,SEL,id))objc_msgSend)(saveReq, updateReminderSel, remChild);
+    if (!childItem) return @"ReminderKit refused to edit the reminder";
+
+    // The container the child goes into: the parent's subtask context, or,
+    // to outdent, the list itself.
+    id container = nil;
+    if (remParent) {
+        id parentItem = ((id(*)(id,SEL,id))objc_msgSend)(saveReq, updateReminderSel, remParent);
+        SEL ctxSel = NSSelectorFromString(@"subtaskContext");
+        if (parentItem && [parentItem respondsToSelector:ctxSel]) {
+            container = ((id(*)(id,SEL))objc_msgSend)(parentItem, ctxSel);
+        }
+    } else {
+        id remList = rem_list_from_ek_calendar(child.calendar);
+        SEL updateListSel = NSSelectorFromString(@"updateList:");
+        if (remList && [saveReq respondsToSelector:updateListSel]) {
+            container = ((id(*)(id,SEL,id))objc_msgSend)(saveReq, updateListSel, remList);
+        }
+    }
+    if (!container || ![container respondsToSelector:addSel]) return @"ReminderKit subtask API unavailable";
+    ((void(*)(id,SEL,id))objc_msgSend)(container, addSel, childItem);
+
+    NSError* err = nil;
+    BOOL saved = NO;
+    @try {
+        saved = ((BOOL(*)(id,SEL,NSError**))objc_msgSend)(saveReq, saveSel, &err);
+    } @catch (NSException* e) {
+        return [NSString stringWithFormat:@"ReminderKit save failed: %@", e.reason];
+    }
+    if (!saved) return [NSString stringWithFormat:@"ReminderKit save failed: %@", err.localizedDescription];
+
+    EKEventStore* store = get_store();
+    if ([store respondsToSelector:@selector(refreshSourcesIfNecessary)]) {
+        [store refreshSourcesIfNecessary];
+    }
+    return nil;
+}
+
 // --- Synchronous reminder fetch (dispatch_semaphore for async API) ---
 
 static NSArray<EKReminder*>* fetch_all_reminders(NSArray<EKCalendar*>* calendars) {
@@ -670,6 +775,8 @@ static NSDictionary* reminder_to_dict(EKReminder* r) {
     }
     d[@"flagged"] = flagged ? @YES : @NO;
     d[@"tags"] = tags ?: @[];
+    NSString* parentID = read_parent_id(remReminder);
+    if (parentID) d[@"parentID"] = parentID;
     d[@"priority"] = @(r.priority);
     d[@"hasAlarms"] = r.hasAlarms ? @YES : @NO;
 
@@ -1522,6 +1629,61 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
                 }
             }
 
+            // Parent: resolved and validated here, before anything is saved,
+            // and applied after the list move below. NSNull makes the
+            // reminder top-level; a string nests it under that reminder.
+            id parentInput = input[@"parentID"];
+            EKReminder* newParent = nil;
+            BOOL setParent = NO;
+            if (parentInput == [NSNull null]) {
+                id remReminder = load_reminderkit() ? rem_reminder_from_ek(reminder) : nil;
+                setParent = read_parent_id(remReminder) != nil;
+            } else if (parentInput) {
+                if (![parentInput isKindOfClass:[NSString class]]) {
+                    res.error = strdup("invalid parentID: want a string");
+                    return;
+                }
+                NSArray<EKReminder*>* matches = find_reminder_matches(parentInput);
+                if (matches.count == 0) {
+                    res.error = strdup([[NSString stringWithFormat:@"parent reminder not found: %@", parentInput] UTF8String]);
+                    return;
+                }
+                if (matches.count > 1) {
+                    res.error = strdup([[NSString stringWithFormat:@"parent ID prefix %@ matches %lu reminders",
+                        parentInput, (unsigned long)matches.count] UTF8String]);
+                    return;
+                }
+                newParent = matches[0];
+                if ([newParent.calendarItemIdentifier isEqualToString:reminder.calendarItemIdentifier]) {
+                    res.error = strdup("a reminder can't be its own parent");
+                    return;
+                }
+                EKCalendar* finalList = moveTarget ?: reminder.calendar;
+                if (![newParent.calendar.calendarIdentifier isEqualToString:finalList.calendarIdentifier]) {
+                    res.error = strdup([[NSString stringWithFormat:@"parent is in list %@, but the reminder is in %@; subtasks must be in their parent's list",
+                        newParent.calendar.title, finalList.title] UTF8String]);
+                    return;
+                }
+                if (!load_reminderkit()) {
+                    res.error = strdup("subtasks need the private ReminderKit framework, which isn't available");
+                    return;
+                }
+                id remReminder = rem_reminder_from_ek(reminder);
+                id remParent = rem_reminder_from_ek(newParent);
+                if (read_parent_id(remParent)) {
+                    res.error = strdup([[NSString stringWithFormat:@"parent %@ is itself a subtask; Reminders allows only one level",
+                        newParent.title] UTF8String]);
+                    return;
+                }
+                if (has_subtasks(remReminder)) {
+                    res.error = strdup("the reminder has subtasks of its own; Reminders allows only one level");
+                    return;
+                }
+                NSString* currentParent = read_parent_id(remReminder);
+                setParent = !currentParent ||
+                    [currentParent caseInsensitiveCompare:newParent.calendarItemIdentifier] != NSOrderedSame;
+            }
+
             // To all-day from timed, or on the same date: first save all-day
             // on the following day, then the requested day in the final save,
             // so the final save changes the due value (see the due date
@@ -1585,6 +1747,18 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
                 }
                 EKReminder* fresh = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
                 if (fresh) reminder = fresh;
+            }
+
+            // Nest under, or remove from, a parent (validated above).
+            if (setParent) {
+                EKReminder* fresh = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
+                NSString* parentError = write_parent(fresh ?: reminder, newParent);
+                if (parentError) {
+                    res.error = strdup([[NSString stringWithFormat:@"failed to set parent: %@", parentError] UTF8String]);
+                    return;
+                }
+                EKReminder* postSave = (EKReminder*)[store calendarItemWithIdentifier:reminder.calendarItemIdentifier];
+                if (postSave) reminder = postSave;
             }
 
             // URL attachment via private ReminderKit API (see create path).

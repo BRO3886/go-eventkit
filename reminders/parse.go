@@ -26,6 +26,7 @@ type rawReminder struct {
 	Flagged         bool                `json:"flagged"`
 	URL             *string             `json:"url"`
 	Tags            []string            `json:"tags"`
+	ParentID        string              `json:"parentID"`
 	Recurring       bool                `json:"recurring"`
 	RecurrenceRules []rawRecurrenceRule `json:"recurrenceRules"`
 	HasAlarms       bool                `json:"hasAlarms"`
@@ -142,6 +143,7 @@ func convertRawReminder(r *rawReminder) Reminder {
 		Flagged:        r.Flagged,
 		URL:            derefString(r.URL),
 		Tags:           append([]string(nil), r.Tags...),
+		ParentID:       r.ParentID,
 		Recurring:      r.Recurring,
 		HasAlarms:      r.HasAlarms,
 	}
@@ -428,6 +430,13 @@ func marshalUpdateInput(input UpdateReminderInput) (string, error) {
 	}
 	if input.Tags != nil {
 		m["tags"] = *input.Tags
+	}
+	if input.ParentID != nil {
+		if *input.ParentID == "" {
+			m["parentID"] = nil
+		} else {
+			m["parentID"] = *input.ParentID
+		}
 	}
 
 	if input.ClearDueDate {
