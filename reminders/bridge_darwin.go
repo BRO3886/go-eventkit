@@ -119,12 +119,19 @@ func (c *Client) Reminders(opts ...ListOption) ([]Reminder, error) {
 
 // Reminder returns a single reminder by ID.
 // Accepts a full identifier or a unique prefix (e.g., first 8 characters).
-// Returns [ErrNotFound] if no reminder matches.
+// Returns [ErrNotFound] if no reminder matches, or an [*AmbiguousIDError]
+// (matching [ErrAmbiguousID]) if a prefix matches more than one.
 func (c *Client) Reminder(id string) (*Reminder, error) {
 	cID := C.CString(id)
 	defer C.free(unsafe.Pointer(cID))
 
 	res := C.ek_rem_get_reminder(cID)
+	if res.error != nil && res.result != nil {
+		// The bridge signals ambiguity with an error plus the candidates.
+		C.ek_rem_free(res.error)
+		defer C.ek_rem_free(res.result)
+		return nil, parseAmbiguousID(id, C.GoString(res.result))
+	}
 	if res.error != nil {
 		return nil, fmt.Errorf("%w: %s", ErrNotFound, resultErr(res))
 	}
