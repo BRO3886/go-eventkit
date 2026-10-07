@@ -1681,11 +1681,13 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
                         newParent.title] UTF8String]);
                     return;
                 }
-                if (has_subtasks(remReminder)) {
+                // A subtask can't have subtasks (and the probe below fails
+                // safe to YES for one), so only top-level reminders need it.
+                NSString* currentParent = read_parent_id(remReminder);
+                if (!currentParent && has_subtasks(remReminder)) {
                     res.error = strdup("the reminder has subtasks of its own; Reminders allows only one level");
                     return;
                 }
-                NSString* currentParent = read_parent_id(remReminder);
                 setParent = !currentParent ||
                     [currentParent caseInsensitiveCompare:newParent.calendarItemIdentifier] != NSOrderedSame;
             }

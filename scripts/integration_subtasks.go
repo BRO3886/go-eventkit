@@ -132,6 +132,8 @@ func main() {
 	check("store: child B under parent", storeParent(testList, "child B") == prefix+"parent", storeParent(testList, "child B"))
 	check("store: CloudKit parent identifier set", storeCKParentSet(testList, "child A"), "ZCKPARENTREMINDERIDENTIFIER is empty")
 	check("fresh process reads parentID", freshParent(childA.ID) == parent.ID, freshParent(childA.ID))
+	r, err = setParent(childA, parent.ID)
+	check("repeat the same parent is a no-op", err == nil && r.ParentID == parent.ID, fmt.Sprintf("err=%v parentID=%q", err, parentIDOf(r)))
 	p, err := client.Reminder(parent.ID)
 	check("parent stays top-level", err == nil && p.ParentID == "", fmt.Sprintf("err=%v parentID=%q", err, parentIDOf(p)))
 
