@@ -1636,7 +1636,13 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
             EKReminder* newParent = nil;
             BOOL setParent = NO;
             if (parentInput == [NSNull null]) {
+                // Without ReminderKit the current parent can't be read, so
+                // don't report a no-op outdent as success.
                 id remReminder = load_reminderkit() ? rem_reminder_from_ek(reminder) : nil;
+                if (!remReminder) {
+                    res.error = strdup("subtasks need the private ReminderKit framework, which isn't available");
+                    return;
+                }
                 setParent = read_parent_id(remReminder) != nil;
             } else if (parentInput) {
                 if (![parentInput isKindOfClass:[NSString class]]) {
