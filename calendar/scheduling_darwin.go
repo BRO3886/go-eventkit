@@ -10,6 +10,7 @@ import "C"
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 	"unsafe"
 )
@@ -37,11 +38,14 @@ func (c *Client) AvailabilitySupported() bool {
 
 // RespondToInvitation sets the current user's RSVP status on an event
 // invitation. On a server-backed calendar this sends a reply to the organizer
-// when saved. Returns [ErrNotFound] if the event does not exist and
-// [ErrUnsupportedFeature] if RSVP is unavailable on this macOS.
+// when saved. The ID must be full and exact. Returns [ErrNotFound] if the event
+// does not exist, and [ErrUnsupportedFeature] if RSVP is unavailable on this macOS.
 func (c *Client) RespondToInvitation(eventID string, status ParticipantStatus) error {
 	if !c.RSVPSupported() {
 		return ErrUnsupportedFeature
+	}
+	if strings.IndexByte(eventID, 0) >= 0 {
+		return ErrNotFound
 	}
 	cID := C.CString(eventID)
 	defer C.free(unsafe.Pointer(cID))

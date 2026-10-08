@@ -178,7 +178,7 @@ func (c *Client) Calendars() ([]Calendar, error)
 // Options can filter by calendar, search query, etc.
 func (c *Client) Events(start, end time.Time, opts ...ListOption) ([]Event, error)
 
-// Event returns a single event by ID (full ID or prefix).
+// Event returns a single event by its full, exact ID.
 func (c *Client) Event(id string) (*Event, error)
 
 // --- Writes ---

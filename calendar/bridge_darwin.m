@@ -24,6 +24,14 @@ static EKEventStore* get_store(void) {
     return store;
 }
 
+// EventKit can resolve partial or stale IDs to another event.
+static EKEvent* find_event_by_id(EKEventStore* store, NSString* eid) {
+    if (eid.length == 0) return nil;
+    EKEvent* event = [store eventWithIdentifier:eid];
+    if (![event.eventIdentifier isEqualToString:eid]) return nil;
+    return event;
+}
+
 // --- Serial dispatch queue for write serialization ---
 
 static dispatch_queue_t get_write_queue(void) {
@@ -640,30 +648,11 @@ ek_result_t ek_cal_get_event(const char* event_id) {
         EKEventStore* store = get_store();
         NSString* eid = [NSString stringWithUTF8String:event_id];
 
-        // Try eventWithIdentifier first (exact match).
-        EKEvent* event = [store eventWithIdentifier:eid];
+        EKEvent* event = find_event_by_id(store, eid);
         if (event) {
             res.result = to_json(event_to_dict(event));
             if (!res.result) res.error = strdup("JSON serialization failed");
             return res;
-        }
-
-        // Prefix match: search events in a broad range and match by prefix.
-        NSString* upperTarget = [eid uppercaseString];
-        NSDate* start = [NSDate dateWithTimeIntervalSinceNow:-365 * 24 * 60 * 60]; // 1 year ago
-        NSDate* end = [NSDate dateWithTimeIntervalSinceNow:365 * 24 * 60 * 60];    // 1 year from now
-        NSPredicate* predicate = [store predicateForEventsWithStartDate:start
-                                                               endDate:end
-                                                             calendars:nil];
-        NSArray<EKEvent*>* events = [store eventsMatchingPredicate:predicate];
-
-        for (EKEvent* e in events) {
-            NSString* eId = [e.eventIdentifier uppercaseString];
-            if ([eId hasPrefix:upperTarget]) {
-                res.result = to_json(event_to_dict(e));
-                if (!res.result) res.error = strdup("JSON serialization failed");
-                return res;
-            }
         }
 
         res.error = strdup([[NSString stringWithFormat:@"event not found: %s", event_id] UTF8String]);
@@ -889,7 +878,7 @@ ek_result_t ek_cal_update_event(const char* event_id, const char* json_input, in
             EKEventStore* store = get_store();
             NSString* eid = [NSString stringWithUTF8String:event_id];
 
-            EKEvent* event = [store eventWithIdentifier:eid];
+            EKEvent* event = find_event_by_id(store, eid);
             if (!event) {
                 res.error = strdup([[NSString stringWithFormat:@"event not found: %s", event_id] UTF8String]);
                 return;
@@ -1340,7 +1329,7 @@ ek_result_t ek_cal_delete_events(const char* json_ids, int span) {
             NSMutableDictionary* errors = [NSMutableDictionary dictionary];
 
             for (NSString* eid in ids) {
-                EKEvent* event = [store eventWithIdentifier:eid];
+                EKEvent* event = find_event_by_id(store, eid);
                 if (!event) continue; // silently skip not found
 
                 NSError* removeError = nil;
@@ -1369,7 +1358,7 @@ ek_result_t ek_cal_delete_event(const char* event_id, int span) {
             EKEventStore* store = get_store();
             NSString* eid = [NSString stringWithUTF8String:event_id];
 
-            EKEvent* event = [store eventWithIdentifier:eid];
+            EKEvent* event = find_event_by_id(store, eid);
             if (!event) {
                 res.error = strdup([[NSString stringWithFormat:@"event not found: %s", event_id] UTF8String]);
                 return;
@@ -1409,7 +1398,7 @@ ek_result_t ek_cal_respond_to_event(const char* event_id, int status) {
                 return;
             }
             EKEventStore* store = get_store();
-            EKEvent* event = [store eventWithIdentifier:[NSString stringWithUTF8String:event_id]];
+            EKEvent* event = find_event_by_id(store, [NSString stringWithUTF8String:event_id]);
             if (!event) {
                 res.error = strdup([[NSString stringWithFormat:@"event not found: %s", event_id] UTF8String]);
                 return;
