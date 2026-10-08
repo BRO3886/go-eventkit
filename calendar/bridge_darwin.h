@@ -21,7 +21,7 @@ ek_result_t ek_cal_fetch_calendars(void);
 ek_result_t ek_cal_fetch_events(const char* start_date, const char* end_date,
                            const char* calendar_id, const char* search_query);
 
-// ek_cal_get_event returns a single event as JSON by its eventIdentifier.
+// ek_cal_get_event returns a single event as JSON by its full, exact eventIdentifier.
 // Caller must free result with ek_cal_free.
 ek_result_t ek_cal_get_event(const char* event_id);
 

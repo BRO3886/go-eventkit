@@ -111,9 +111,12 @@ func (c *Client) Events(start, end time.Time, opts ...ListOption) ([]Event, erro
 	return parseEventsJSON(jsonStr)
 }
 
-// Event returns a single event by its stable event identifier
-// (EKEvent.eventIdentifier). Returns [ErrNotFound] if no event matches.
+// Event returns a single event by its full, exact stable event identifier
+// (EKEvent.eventIdentifier). Partial, stale, and unknown IDs return [ErrNotFound].
 func (c *Client) Event(id string) (*Event, error) {
+	if strings.IndexByte(id, 0) >= 0 {
+		return nil, ErrNotFound
+	}
 	cID := C.CString(id)
 	defer C.free(unsafe.Pointer(cID))
 
@@ -161,8 +164,12 @@ func (c *Client) CreateEvent(input CreateEventInput) (*Event, error) {
 // UpdateEvent updates an existing event and returns the updated version.
 // Only non-nil fields in the input are modified. The span parameter controls
 // whether the change applies to just this occurrence or all future occurrences
-// of a recurring event. Returns [ErrNotFound] if the event does not exist.
+// of a recurring event. The ID must be full and exact; otherwise it returns
+// [ErrNotFound].
 func (c *Client) UpdateEvent(id string, input UpdateEventInput, span Span) (*Event, error) {
+	if strings.IndexByte(id, 0) >= 0 {
+		return nil, ErrNotFound
+	}
 	if input.RecurrenceRules != nil {
 		for _, rule := range *input.RecurrenceRules {
 			if err := rule.Validate(); err != nil {
@@ -198,8 +205,11 @@ func (c *Client) UpdateEvent(id string, input UpdateEventInput, span Span) (*Eve
 // DeleteEvent permanently removes an event.
 // The span parameter controls whether the deletion applies to just this
 // occurrence or all future occurrences of a recurring event.
-// Returns [ErrNotFound] if the event does not exist.
+// The ID must be full and exact; otherwise it returns [ErrNotFound].
 func (c *Client) DeleteEvent(id string, span Span) error {
+	if strings.IndexByte(id, 0) >= 0 {
+		return ErrNotFound
+	}
 	cID := C.CString(id)
 	defer C.free(unsafe.Pointer(cID))
 
@@ -218,7 +228,8 @@ func (c *Client) DeleteEvent(id string, span Span) error {
 // DeleteEvents permanently removes multiple events in a single bridge call.
 // The span parameter applies to all events.
 // Returns a map of event ID to error for any events that failed to delete.
-// Events that don't exist are silently skipped (not included in the error map).
+// IDs must be full and exact. Partial, stale, and unknown IDs are silently
+// skipped (not included in the error map).
 // Returns nil if all deletions succeed (or ids is empty).
 func (c *Client) DeleteEvents(ids []string, span Span) map[string]error {
 	if len(ids) == 0 {
