@@ -82,6 +82,20 @@ func TestFormatTimeRange(t *testing.T) {
 	}
 }
 
+func TestParseAlertDuration_Overflow(t *testing.T) {
+	overflowing := []string{
+		"153722867280912932m", // Documented bypass — overflows time.Duration.
+		"99999999999999999999m",
+		"99999999999h",
+		"99999999d",
+	}
+	for _, in := range overflowing {
+		if _, err := ParseAlertDuration(in); err == nil {
+			t.Errorf("ParseAlertDuration(%q) returned nil error; expected overflow rejection", in)
+		}
+	}
+}
+
 func TestParseAlertDuration(t *testing.T) {
 	tests := []struct {
 		input   string

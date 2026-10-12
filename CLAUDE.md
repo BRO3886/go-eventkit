@@ -41,8 +41,15 @@ go-eventkit/
 ├── dateparser/                  # Public: Natural language date parsing (shared by cal + rem CLIs)
 │   ├── dateparser.go            # ParseDate, ParseDateRelativeTo, options, all parse functions
 │   ├── format.go                # FormatDuration, FormatTimeRange, ParseAlertDuration
+│   ├── time_bounds.go           # StartOfDay, EndOfDayIfMidnight (day-range helpers)
 │   ├── dateparser_test.go       # 35 test functions (keywords, relative, weekday, tz, DST, etc.)
-│   └── format_test.go           # Format/duration test suite
+│   ├── format_test.go           # Format/duration test suite
+│   └── time_bounds_test.go      # Day-boundary helper tests
+├── userargs/                    # Public: user/LLM argument shapes → eventkit primitives (cgo-free)
+│   ├── recurrence.go            # RecurrenceArgs, ParseRecurrence, ParseWeekday, ParseWeekdays
+│   ├── alert.go                 # ParseAlertOffsets, MaxAlertOffset
+│   ├── recurrence_test.go       # Recurrence + weekday parsing tests
+│   └── alert_test.go            # Alert offset tests
 ├── scripts/                     # Integration tests (require real EventKit)
 │   ├── integration.go           # 35 calendar integration tests (incl. WatchChanges tests 32-35)
 │   ├── integration_reminders.go # 34 reminder integration tests (incl. WatchChanges tests 31-34)
@@ -69,6 +76,7 @@ go-eventkit/
 - **Phase 1**: `calendar/` package — COMPLETE. Full event CRUD + calendar container CRUD + recurrence rules + structured locations. Coverage: 56.7%.
 - **Phase 2**: `reminders/` package — COMPLETE. Full reminder CRUD + list container CRUD + recurrence rules. Coverage: 54.9%.
 - **dateparser**: `dateparser/` package — COMPLETE. Shared natural language date parser for cal + rem CLIs. 3 options (`WithDefaultHour`, `WithSmartTimeRollover`, `WithEOWSkipToday`). 35 test functions.
+- **userargs**: `userargs/` package — COMPLETE. Converts user-facing argument shapes (string frequency, short weekday codes, duration strings) into `eventkit.RecurrenceRule` and `time.Duration`. Cgo-free, builds on every platform — callers parse before crossing into `calendar/` or `reminders/`. Centralizes translation that every consumer would otherwise reimplement.
 - **Phase 3**: `WatchChanges` — COMPLETE (v0.3.0). Change notifications via self-pipe + EKEventStoreChangedNotification. 4 unit tests per package. See `docs/prd/change-notifications-prd.md`.
 - **Concurrency safety** (v0.4.0): Inline error returns (`ek_result_t`), serial write queue (`dispatch_sync`), non-blocking WatchChanges pipe reads. `RecurrenceRule.Validate()` catches invalid constraints. Batch delete: `DeleteEvents(ids, span)`, `DeleteReminders(ids)`. Better "not found" errors include available names.
 - **URL attachments** (v0.5.0): Reminder URLs write to the real Reminders.app URL field via ReminderKit private API introspection.
@@ -127,6 +135,7 @@ Test coverage ceiling is ~55-57% because cgo bridge functions (bridge_darwin.go)
 ## Downstream Consumers
 - `cal` CLI (separate repo) — consumes `calendar/` and `dateparser/` packages
 - `rem` CLI — will migrate to consume `reminders/` and `dateparser/` packages
+- **userargs consumer migration**: `ical`'s `buildRecurrenceRule`/`weekdayMap`/`parseRepeatDays` (`cmd/ical/commands/add.go`) and its local `startOfDay`/`endOfDayIfMidnight` (`cmd/ical/commands/list.go`) are hand-rolled copies of `userargs.ParseRecurrence` and the `dateparser` day-boundary helpers. Both consumers should drop the local versions rather than keep diverging.
 - **dateparser consumer migration**:
   - cal: `dateparser.ParseDate(input)` — no options, defaults match cal behavior
   - rem: `dateparser.ParseDate(input, dateparser.WithDefaultHour(9), dateparser.WithSmartTimeRollover(), dateparser.WithEOWSkipToday())`
