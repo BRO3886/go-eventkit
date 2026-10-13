@@ -830,6 +830,35 @@ func main() {
 		}
 	}
 
+	// --- Test 36: Availability ("Show As") on create + update ---
+	{
+		free := calendar.AvailabilityFree
+		availEvent, err := client.CreateEvent(calendar.CreateEventInput{
+			Title:        "[go-eventkit test] Availability",
+			StartDate:    testStart.Add(13 * time.Hour),
+			EndDate:      testStart.Add(14 * time.Hour),
+			Notes:        "Created by go-eventkit integration test. Safe to delete.",
+			Availability: &free,
+		})
+		check("Create event with availability=free", err)
+		if err == nil {
+			if availEvent.Availability != calendar.AvailabilityFree {
+				log.Printf("  FAIL: availability = %s, want free", availEvent.Availability)
+				failed++
+				passed--
+			}
+			busy := calendar.AvailabilityBusy
+			updated, err := client.UpdateEvent(availEvent.ID, calendar.UpdateEventInput{Availability: &busy}, calendar.SpanThisEvent)
+			check("Update availability to busy", err)
+			if err == nil && updated.Availability != calendar.AvailabilityBusy {
+				log.Printf("  FAIL: availability = %s, want busy", updated.Availability)
+				failed++
+				passed--
+			}
+			check("Delete availability event", client.DeleteEvent(availEvent.ID, calendar.SpanThisEvent))
+		}
+	}
+
 	// --- Summary ---
 	fmt.Printf("\n=== Integration Test Results ===\n")
 	fmt.Printf("Passed: %d\n", passed)

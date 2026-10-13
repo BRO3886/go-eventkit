@@ -426,6 +426,12 @@ type CreateEventInput struct {
 	// TravelTime sets travel time before the event. Uses a private EventKit
 	// accessor; ignored if unavailable.
 	TravelTime time.Duration `json:"travelTime,omitempty"`
+	// Availability sets how the event shows on free/busy (Calendar.app's
+	// "Show As"). Nil keeps the calendar's default. The target calendar must
+	// support the value (EKCalendar.supportedEventAvailabilities; subscribed
+	// and some read-only calendars support none), otherwise CreateEvent
+	// returns an error. [AvailabilityNotSupported] is not a valid value to write.
+	Availability *Availability `json:"availability,omitempty"`
 }
 
 // AttendeeInput describes a participant to invite to an event.
@@ -468,6 +474,11 @@ type UpdateEventInput struct {
 	Attendees []AttendeeInput `json:"attendees,omitempty"`
 	// TravelTime sets travel time before the event. Nil leaves it unchanged.
 	TravelTime *time.Duration `json:"travelTime,omitempty"`
+	// Availability sets how the event shows on free/busy (Calendar.app's
+	// "Show As"). Nil leaves it unchanged. The event's calendar must support
+	// the value; otherwise UpdateEvent returns an error.
+	// [AvailabilityNotSupported] is not a valid value to write.
+	Availability *Availability `json:"availability,omitempty"`
 }
 
 // AvailabilityType is the free/busy classification of a time span returned by

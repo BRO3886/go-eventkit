@@ -73,6 +73,7 @@ go-eventkit/
 - **Concurrency safety** (v0.4.0): Inline error returns (`ek_result_t`), serial write queue (`dispatch_sync`), non-blocking WatchChanges pipe reads. `RecurrenceRule.Validate()` catches invalid constraints. Batch delete: `DeleteEvents(ids, span)`, `DeleteReminders(ids)`. Better "not found" errors include available names.
 - **URL attachments** (v0.5.0): Reminder URLs write to the real Reminders.app URL field via ReminderKit private API introspection.
 - **Suppress default alarms** (v0.6.0): `CreateEventInput.SuppressDefaultAlarms` bool opts out of calendar-inherited default alarms at save time. Bridge clears `event.alarms` before adding user-supplied alerts.
+- **Availability writes**: `CreateEventInput.Availability` / `UpdateEventInput.Availability` (`*Availability`) set "Show As" (busy/free/tentative/unavailable). Bridge checks `calendar.supportedEventAvailabilities` and errors on unsupported values; `AvailabilityNotSupported` is rejected in Go.
 - **Deferred**: Future frameworks (Contacts, etc.) — out of scope for now
 - **Deferred**: Performance benchmarking — see `docs/prd/benchmarking-prd.md`
 - **Deferred**: 10 future capabilities — see `docs/prd/future-capabilities-prd.md`

@@ -660,6 +660,24 @@ ek_result_t ek_cal_get_event(const char* event_id) {
     }
 }
 
+// apply_availability sets event.availability ("Show As") after checking the
+// event's calendar supports that value. Returns an error message, or nil.
+static NSString* apply_availability(EKEvent* event, NSNumber* value) {
+    NSInteger a = [value integerValue];
+    if (a < EKEventAvailabilityBusy || a > EKEventAvailabilityUnavailable) {
+        return [NSString stringWithFormat:@"invalid availability %ld", (long)a];
+    }
+    EKCalendarEventAvailabilityMask supported = event.calendar.supportedEventAvailabilities;
+    if (supported == EKCalendarEventAvailabilityNone) {
+        return [NSString stringWithFormat:@"calendar \"%@\" does not support setting availability", event.calendar.title];
+    }
+    if (!(supported & (1 << a))) {
+        return [NSString stringWithFormat:@"calendar \"%@\" does not support that availability", event.calendar.title];
+    }
+    event.availability = (EKEventAvailability)a;
+    return nil;
+}
+
 ek_result_t ek_cal_create_event(const char* json_input) {
     __block ek_result_t res = {NULL, NULL};
     dispatch_sync(get_write_queue(), ^{
@@ -838,6 +856,15 @@ ek_result_t ek_cal_create_event(const char* json_input) {
             // Travel time (private API; no-op if unavailable).
             if (input[@"travelTime"] && input[@"travelTime"] != [NSNull null]) {
                 set_travel_time_for_event(event, [input[@"travelTime"] doubleValue]);
+            }
+
+            // Availability ("Show As"); the calendar must support the value.
+            if (input[@"availability"] && input[@"availability"] != [NSNull null]) {
+                NSString* availErr = apply_availability(event, input[@"availability"]);
+                if (availErr) {
+                    res.error = strdup([availErr UTF8String]);
+                    return;
+                }
             }
 
             // Attendees (private API). Fail loudly if requested but unsupported
@@ -1061,6 +1088,16 @@ ek_result_t ek_cal_update_event(const char* event_id, const char* json_input, in
             // Travel time (private API; no-op if unavailable).
             if (input[@"travelTime"] != nil && input[@"travelTime"] != [NSNull null]) {
                 set_travel_time_for_event(event, [input[@"travelTime"] doubleValue]);
+            }
+
+            // Availability ("Show As"); checked against the event's (possibly
+            // just-moved) calendar.
+            if (input[@"availability"] != nil && input[@"availability"] != [NSNull null]) {
+                NSString* availErr = apply_availability(event, input[@"availability"]);
+                if (availErr) {
+                    res.error = strdup([availErr UTF8String]);
+                    return;
+                }
             }
 
             // Attendees (private API). Adds to the existing attendee list.

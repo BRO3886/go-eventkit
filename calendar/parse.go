@@ -366,6 +366,22 @@ type createEventJSON struct {
 	StructuredLocation    *structuredLocationJSON `json:"structuredLocation,omitempty"`
 	Attendees             []attendeeInputJSON     `json:"attendees,omitempty"`
 	TravelTime            float64                 `json:"travelTime,omitempty"`
+	Availability          *int                    `json:"availability,omitempty"`
+}
+
+// marshalAvailability validates a writable availability value and returns it
+// as the EKEventAvailability integer the bridge expects.
+func marshalAvailability(a *Availability) (*int, error) {
+	if a == nil {
+		return nil, nil
+	}
+	switch *a {
+	case AvailabilityBusy, AvailabilityFree, AvailabilityTentative, AvailabilityUnavailable:
+		v := int(*a)
+		return &v, nil
+	default:
+		return nil, fmt.Errorf("calendar: invalid availability %d (want busy, free, tentative or unavailable)", int(*a))
+	}
 }
 
 type attendeeInputJSON struct {
@@ -491,6 +507,11 @@ func marshalCreateInput(input CreateEventInput) ([]byte, error) {
 	if input.TravelTime > 0 {
 		j.TravelTime = input.TravelTime.Seconds()
 	}
+	availability, err := marshalAvailability(input.Availability)
+	if err != nil {
+		return nil, err
+	}
+	j.Availability = availability
 
 	return json.Marshal(j)
 }
@@ -571,6 +592,13 @@ func marshalUpdateInput(input UpdateEventInput) ([]byte, error) {
 	}
 	if input.TravelTime != nil {
 		m["travelTime"] = input.TravelTime.Seconds()
+	}
+	availability, err := marshalAvailability(input.Availability)
+	if err != nil {
+		return nil, err
+	}
+	if availability != nil {
+		m["availability"] = *availability
 	}
 
 	return json.Marshal(m)
