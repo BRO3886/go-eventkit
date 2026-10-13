@@ -9,3 +9,6 @@ coverage.out
 
 # Journals (symlink to ~/projects/work-journals/go-eventkit)
 journals
+# local Codex config + skill mirrors (generated, not shared)
+.agents/
+.codex/
