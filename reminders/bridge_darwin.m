@@ -108,6 +108,27 @@ static NSString* format_date(NSDate* date) {
     return [get_iso_formatter() stringFromDate:date];
 }
 
+// is_all_day reports whether due date components carry no time of day,
+// which is how Reminders.app stores an all-day due date.
+static BOOL is_all_day(NSDateComponents* comps) {
+    return comps && comps.hour == NSDateComponentUndefined;
+}
+
+// all_day_components parses "YYYY-MM-DD" into date-only components (no
+// hour/minute/second) so the reminder is saved as a true all-day reminder.
+// Returns nil for any other input.
+static NSDateComponents* all_day_components(id value) {
+    if (![value isKindOfClass:[NSString class]]) return nil;
+    NSArray<NSString*>* parts = [(NSString*)value componentsSeparatedByString:@"-"];
+    if (parts.count != 3) return nil;
+    NSDateComponents* comps = [[NSDateComponents alloc] init];
+    comps.year = [parts[0] integerValue];
+    comps.month = [parts[1] integerValue];
+    comps.day = [parts[2] integerValue];
+    if (comps.year <= 0 || comps.month < 1 || comps.month > 12 || comps.day < 1 || comps.day > 31) return nil;
+    return comps;
+}
+
 // rem_alarm_from_input builds an EKAlarm from a bridge alarm dict.
 // Trigger kinds: absoluteDate, relativeOffset (presence of the key matters —
 // zero means "at time of event"), and location + proximity (geofence).
@@ -248,6 +269,25 @@ static BOOL read_flagged(id remReminder) {
         // Property not present on this macOS — fall through to NO.
     }
     return NO;
+}
+
+// read_display_all_day reads whether Reminders displays the due date as
+// all-day (REMReminder.displayDate.isAllDay, stored as ZDISPLAYDATEISALLDAY).
+// It can disagree with dueDateComponents: Reminders only recomputes it when
+// the due value changes, so setting all-day on the same date as an existing
+// timed due leaves the reminder displayed as timed. Returns fallback when the
+// private API is unavailable.
+static BOOL read_display_all_day(id remReminder, BOOL fallback) {
+    if (!remReminder) return fallback;
+    @try {
+        id displayDate = [remReminder valueForKey:@"displayDate"];
+        if (displayDate && [displayDate respondsToSelector:NSSelectorFromString(@"isAllDay")]) {
+            return ((BOOL(*)(id,SEL))objc_msgSend)(displayDate, NSSelectorFromString(@"isAllDay"));
+        }
+    } @catch (NSException* e) {
+        // Property not present on this macOS — use the fallback.
+    }
+    return fallback;
 }
 
 static NSArray<NSString*>* read_hashtag_names(id remReminder) {
@@ -622,8 +662,9 @@ static NSDictionary* reminder_to_dict(EKReminder* r) {
     // falling back to NO if the private API is unavailable on this macOS.
     BOOL flagged = NO;
     NSArray<NSString*>* tags = @[];
+    id remReminder = nil;
     if (load_reminderkit()) {
-        id remReminder = rem_reminder_from_ek(r);
+        remReminder = rem_reminder_from_ek(r);
         flagged = read_flagged(remReminder);
         tags = read_hashtag_names(remReminder);
     }
@@ -638,6 +679,9 @@ static NSDictionary* reminder_to_dict(EKReminder* r) {
         NSDate* dueDate = [cal dateFromComponents:r.dueDateComponents];
         if (dueDate) {
             d[@"dueDate"] = format_date(dueDate);
+            if (is_all_day(r.dueDateComponents) && read_display_all_day(remReminder, YES)) {
+                d[@"dueDateAllDay"] = @YES;
+            }
         }
     }
 
@@ -833,18 +877,30 @@ static NSString* available_list_names(EKEventStore* store) {
 
 // --- Find reminder by ID or prefix ---
 
-static EKReminder* find_reminder_by_id(NSString* targetId) {
+// find_reminder_matches returns the reminder whose ID equals targetId, or
+// else every reminder whose ID starts with it. An exact match always wins.
+static NSArray<EKReminder*>* find_reminder_matches(NSString* targetId) {
     NSArray<EKReminder*>* allReminders = fetch_all_reminders(nil);
     NSString* target = [targetId uppercaseString];
+    NSMutableArray<EKReminder*>* matches = [NSMutableArray array];
 
     for (EKReminder* r in allReminders) {
         NSString* uuid = [r.calendarItemIdentifier uppercaseString];
-        // Support full ID and prefix match.
-        if ([uuid isEqualToString:target] || [uuid hasPrefix:target]) {
-            return r;
+        if ([uuid isEqualToString:target]) {
+            return @[r];
+        }
+        if ([uuid hasPrefix:target]) {
+            [matches addObject:r];
         }
     }
-    return nil;
+    return matches;
+}
+
+// find_reminder_by_id resolves a full ID or a unique prefix. An ambiguous
+// prefix resolves to nil so no caller ever acts on a guess.
+static EKReminder* find_reminder_by_id(NSString* targetId) {
+    NSArray<EKReminder*>* matches = find_reminder_matches(targetId);
+    return matches.count == 1 ? matches[0] : nil;
 }
 
 // --- Public API ---
@@ -1030,13 +1086,23 @@ ek_result_t ek_rem_get_reminder(const char* target_id) {
             return res;
         }
 
-        EKReminder* r = find_reminder_by_id([NSString stringWithUTF8String:target_id]);
-        if (!r) {
+        NSArray<EKReminder*>* matches = find_reminder_matches([NSString stringWithUTF8String:target_id]);
+        if (matches.count == 0) {
             res.error = strdup([[NSString stringWithFormat:@"reminder not found: %s", target_id] UTF8String]);
             return res;
         }
+        if (matches.count > 1) {
+            // Ambiguous prefix: error plus the candidates as the result.
+            NSMutableArray* candidates = [NSMutableArray arrayWithCapacity:matches.count];
+            for (EKReminder* m in matches) {
+                [candidates addObject:reminder_to_dict(m)];
+            }
+            res.error = strdup([[NSString stringWithFormat:@"ambiguous reminder ID prefix: %s", target_id] UTF8String]);
+            res.result = to_json(candidates);
+            return res;
+        }
 
-        res.result = to_json(reminder_to_dict(r));
+        res.result = to_json(reminder_to_dict(matches[0]));
         if (!res.result) res.error = strdup("JSON serialization failed");
         return res;
     }
@@ -1095,8 +1161,15 @@ ek_result_t ek_rem_create_reminder(const char* json_input) {
                 reminder.calendar = [store defaultCalendarForNewReminders];
             }
 
-            // Due date.
-            if (input[@"dueDate"] && input[@"dueDate"] != [NSNull null]) {
+            // Due date: all-day (date-only components) or timed.
+            if (input[@"dueDateAllDay"]) {
+                NSDateComponents* comps = all_day_components(input[@"dueDateAllDay"]);
+                if (!comps) {
+                    res.error = strdup("invalid dueDateAllDay: want YYYY-MM-DD");
+                    return;
+                }
+                reminder.dueDateComponents = comps;
+            } else if (input[@"dueDate"] && input[@"dueDate"] != [NSNull null]) {
                 NSDate* dueDate = parse_iso_date([input[@"dueDate"] UTF8String]);
                 if (dueDate) {
                     NSCalendar* cal = [NSCalendar currentCalendar];
@@ -1294,8 +1367,36 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
                 reminder.completed = [input[@"completed"] boolValue];
             }
 
-            // Due date.
-            if ([input objectForKey:@"dueDate"]) {
+            // Due date: all-day (date-only components), timed, or cleared.
+            NSDateComponents* dueBeforeAllDay = nil;
+            NSDateComponents* allDayComps = nil;
+            if (input[@"dueDateAllDay"]) {
+                NSDateComponents* comps = all_day_components(input[@"dueDateAllDay"]);
+                if (!comps) {
+                    res.error = strdup("invalid dueDateAllDay: want YYYY-MM-DD");
+                    return;
+                }
+                // Reminders only recomputes its all-day display flag when the
+                // due value changes, so turning a timed due (e.g. midnight on
+                // the same day) into an all-day one in a single save leaves it
+                // displayed as timed, and overdue. The same goes for re-saving
+                // a reminder already stuck in that state, whose components
+                // already look all-day. So when the current due is timed, or
+                // is stuck on the target date (or its display flag can't be
+                // read), it gets an extra save through a different date first;
+                // that happens just before the final save, after all input is
+                // validated. Until then the current due stays in place.
+                NSDateComponents* cur = reminder.dueDateComponents;
+                BOOL sameDate = cur && cur.year == comps.year && cur.month == comps.month && cur.day == comps.day;
+                BOOL stuck = sameDate && is_all_day(cur) &&
+                    !read_display_all_day(load_reminderkit() ? rem_reminder_from_ek(reminder) : nil, NO);
+                if (cur && (!is_all_day(cur) || stuck)) {
+                    dueBeforeAllDay = [cur copy];
+                    allDayComps = comps;
+                } else {
+                    reminder.dueDateComponents = comps;
+                }
+            } else if ([input objectForKey:@"dueDate"]) {
                 if (input[@"dueDate"] == [NSNull null] || input[@"dueDate"] == nil) {
                     reminder.dueDateComponents = nil;
                 } else {
@@ -1421,10 +1522,35 @@ ek_result_t ek_rem_update_reminder(const char* reminder_id, const char* json_inp
                 }
             }
 
+            // To all-day from timed, or on the same date: first save all-day
+            // on the following day, then the requested day in the final save,
+            // so the final save changes the due value (see the due date
+            // above). Stepping through another date instead of clearing keeps
+            // a due date throughout, which recurring reminders require.
+            if (dueBeforeAllDay) {
+                NSCalendar* cal = [NSCalendar currentCalendar];
+                NSDate* day = [cal dateFromComponents:allDayComps];
+                NSDate* nextDay = [cal dateByAddingUnit:NSCalendarUnitDay value:1 toDate:day options:0];
+                reminder.dueDateComponents = [cal components:NSCalendarUnitYear | NSCalendarUnitMonth | NSCalendarUnitDay
+                                                    fromDate:nextDay];
+                NSError* stepError = nil;
+                if (![store saveReminder:reminder commit:YES error:&stepError]) {
+                    res.error = strdup([[NSString stringWithFormat:@"failed to update reminder: %@",
+                        stepError.localizedDescription] UTF8String]);
+                    return;
+                }
+                reminder.dueDateComponents = allDayComps;
+            }
+
             // Save via EventKit.
             NSError* saveError = nil;
             BOOL saved = [store saveReminder:reminder commit:YES error:&saveError];
             if (!saved) {
+                if (dueBeforeAllDay) {
+                    // Don't leave the stepping date behind: restore the old due.
+                    reminder.dueDateComponents = dueBeforeAllDay;
+                    [store saveReminder:reminder commit:YES error:nil];
+                }
                 res.error = strdup([[NSString stringWithFormat:@"failed to update reminder: %@",
                     saveError.localizedDescription] UTF8String]);
                 return;

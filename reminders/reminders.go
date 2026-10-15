@@ -53,6 +53,7 @@ package reminders
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/BRO3886/go-eventkit"
@@ -84,7 +85,29 @@ var (
 	// ErrImmutable is returned by [Client.UpdateList] and
 	// [Client.DeleteList] when the target list is immutable.
 	ErrImmutable = errors.New("reminders: list is immutable")
+
+	// ErrAmbiguousID is returned by [Client.Reminder] when an ID prefix
+	// matches more than one reminder. The returned error is an
+	// [*AmbiguousIDError] listing the matches. Mutating methods never act on
+	// an ambiguous prefix; they return [ErrNotFound].
+	ErrAmbiguousID = errors.New("reminders: ambiguous ID prefix")
 )
+
+// AmbiguousIDError reports an ID prefix that matches more than one reminder.
+// It matches [ErrAmbiguousID] with [errors.Is].
+type AmbiguousIDError struct {
+	// Prefix is the ID prefix that was looked up.
+	Prefix string
+	// Candidates are the reminders whose IDs start with Prefix.
+	Candidates []Reminder
+}
+
+func (e *AmbiguousIDError) Error() string {
+	return fmt.Sprintf("reminders: ID prefix %q matches %d reminders", e.Prefix, len(e.Candidates))
+}
+
+// Unwrap lets errors.Is match [ErrAmbiguousID].
+func (e *AmbiguousIDError) Unwrap() error { return ErrAmbiguousID }
 
 // Reminder represents a single reminder item (EKReminder).
 type Reminder struct {
@@ -103,6 +126,10 @@ type Reminder struct {
 	// In EventKit, due dates use NSDateComponents (date-only, no time component
 	// unless explicitly set).
 	DueDate *time.Time `json:"dueDate,omitempty"`
+	// DueDateAllDay is true when the due date has no time of day (its
+	// dueDateComponents carry no hour). DueDate is then midnight local time
+	// on that date, and Reminders.app shows it as an all-day reminder.
+	DueDateAllDay bool `json:"dueDateAllDay,omitempty"`
 	// RemindMeDate is when the reminder notification fires. Independent of DueDate.
 	RemindMeDate *time.Time `json:"remindMeDate,omitempty"`
 	// CompletionDate is when the reminder was marked complete. Nil if incomplete.
@@ -345,6 +372,10 @@ type CreateReminderInput struct {
 	ListName string
 	// DueDate sets when the reminder is due. Nil for no due date.
 	DueDate *time.Time
+	// DueDateAllDay makes DueDate an all-day due date: only its calendar
+	// date (in DueDate's location) is saved, with no time of day. Ignored
+	// when DueDate is nil.
+	DueDateAllDay bool
 	// RemindMeDate sets when the notification alarm fires. Independent of DueDate.
 	RemindMeDate *time.Time
 	// Priority sets the reminder's priority level.
@@ -377,6 +408,10 @@ type UpdateReminderInput struct {
 	ListName *string
 	// DueDate updates the due date. See also ClearDueDate.
 	DueDate *time.Time
+	// DueDateAllDay makes DueDate an all-day due date: only its calendar
+	// date (in DueDate's location) is saved, with no time of day. Ignored
+	// when DueDate is nil. When false, DueDate is saved as a timed due date.
+	DueDateAllDay bool
 	// ClearDueDate removes the due date entirely when set to true.
 	// Takes precedence over DueDate if both are set.
 	ClearDueDate bool
