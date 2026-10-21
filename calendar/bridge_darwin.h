@@ -30,10 +30,10 @@ ek_result_t ek_cal_get_event(const char* event_id);
 ek_result_t ek_cal_create_event(const char* json_input);
 
 // ek_cal_update_event updates an existing event.
-// event_id is the eventIdentifier, json_input contains fields to update,
-// occurrence_date (ISO 8601, nullable) selects one occurrence of a recurring
-// event by its original start; NULL targets the event as eventWithIdentifier
-// resolves it (the series' first occurrence).
+// event_id is the full, exact eventIdentifier, json_input contains fields to
+// update, occurrence_date (ISO 8601, nullable) selects one occurrence of a
+// recurring event by its original start; NULL targets the event with that ID
+// (for a recurring event, the series' first occurrence).
 // span is 0 for this event only, 1 for future events.
 // Returns the updated event as JSON. Caller must free result.
 ek_result_t ek_cal_update_event(const char* event_id, const char* occurrence_date, const char* json_input, int span);

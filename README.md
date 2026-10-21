@@ -222,10 +222,15 @@ import "github.com/BRO3886/go-eventkit/calendar"
 ```
 
 Event lookups and mutations require the full, exact `Event.ID`. Partial IDs do not
-resolve to an event. `Event`, `UpdateEvent`, `DeleteEvent`, and
-`RespondToInvitation` return `ErrNotFound` for a nonexact ID. `DeleteEvents` keeps
+resolve to an event. `Event`, `UpdateEvent`, `UpdateEventOccurrence`, `DeleteEvent`,
+`DeleteEventOccurrence`, and `RespondToInvitation` return `ErrNotFound` for a
+nonexact ID. `DeleteEvents` keeps
 its existing behavior of skipping IDs that do not exist. Resolve user-facing
 prefixes from a bounded `Events` query and reject multiple matches before writing.
+
+For a recurring event, `UpdateEvent` and `DeleteEvent` act on the series' first
+occurrence. To change or remove a later one, pass its `Event.OccurrenceDate` to
+`UpdateEventOccurrence` or `DeleteEventOccurrence`.
 
 | Method                                               | Description                       |
 | ---------------------------------------------------- | --------------------------------- |
@@ -235,7 +240,9 @@ prefixes from a bounded `Events` query and reject multiple matches before writin
 | `Event(id) (*Event, error)`                          | Get single event by full, exact ID |
 | `CreateEvent(input) (*Event, error)`                 | Create a new event                |
 | `UpdateEvent(id, input, span) (*Event, error)`       | Update an existing event          |
+| `UpdateEventOccurrence(id, occurrenceDate, input, span) (*Event, error)` | Update one occurrence of a recurring event |
 | `DeleteEvent(id, span) error`                        | Delete an event                   |
+| `DeleteEventOccurrence(id, occurrenceDate, span) error` | Delete one occurrence of a recurring event |
 | `DeleteEvents(ids, span) map[string]error`           | Batch delete events               |
 | `CreateCalendar(input) (*Calendar, error)`           | Create a new calendar             |
 | `UpdateCalendar(id, input) (*Calendar, error)`       | Rename or recolor a calendar      |
