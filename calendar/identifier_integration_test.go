@@ -107,6 +107,13 @@ func TestEventExactMutations(t *testing.T) {
 		if err := c.DeleteEvent(input, SpanThisEvent); !errors.Is(err, ErrNotFound) {
 			t.Errorf("nonexact delete error=%v; want ErrNotFound", err)
 		}
+		updated, err = c.UpdateEventOccurrence(input, event.StartDate, UpdateEventInput{Title: &title}, SpanThisEvent)
+		if updated != nil || !errors.Is(err, ErrNotFound) {
+			t.Errorf("nonexact occurrence update returned event=%v error=%v", updated != nil, err)
+		}
+		if err := c.DeleteEventOccurrence(input, event.StartDate, SpanThisEvent); !errors.Is(err, ErrNotFound) {
+			t.Errorf("nonexact occurrence delete error=%v; want ErrNotFound", err)
+		}
 		if errs := c.DeleteEvents([]string{input}, SpanThisEvent); len(errs) != 0 {
 			t.Errorf("batch delete must skip nonexistent IDs: %v", errs)
 		}

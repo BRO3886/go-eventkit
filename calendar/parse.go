@@ -575,3 +575,9 @@ func marshalUpdateInput(input UpdateEventInput) ([]byte, error) {
 
 	return json.Marshal(m)
 }
+
+// formatOccurrenceDate renders an occurrence date the way the bridge parses
+// it: UTC with millisecond precision, matching the occurrenceDate it emits.
+func formatOccurrenceDate(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15:04:05.000Z")
+}
